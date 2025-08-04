@@ -6,6 +6,7 @@ for the Backpack exchange connector.
 """
 
 from hummingbot.connector.exchange.backpack import backpack_constants as CONSTANTS
+from hummingbot.core.api_throttler.async_throttler import AsyncThrottler
 from hummingbot.core.web_assistant.web_assistants_factory import WebAssistantsFactory
 
 
@@ -81,6 +82,11 @@ def ws_url(domain: str = CONSTANTS.DEFAULT_DOMAIN) -> str:
     return CONSTANTS.WS_URL
 
 
+def create_throttler() -> AsyncThrottler:
+    """Create a throttler for Backpack exchange."""
+    return AsyncThrottler(CONSTANTS.RATE_LIMITS)
+
+
 def build_api_factory(throttler=None, time_synchronizer=None, domain: str = CONSTANTS.DEFAULT_DOMAIN,
                       time_provider=None, auth=None) -> WebAssistantsFactory:
     """
@@ -96,6 +102,7 @@ def build_api_factory(throttler=None, time_synchronizer=None, domain: str = CONS
     Returns:
         Configured WebAssistantsFactory
     """
+    throttler = throttler or create_throttler()
     api_factory = WebAssistantsFactory(
         throttler=throttler,
         auth=auth,
@@ -273,3 +280,17 @@ def convert_to_exchange_trading_pair(hb_trading_pair: str) -> str:
         Trading pair in Backpack format (e.g., "BTC_USDT")
     """
     return hb_trading_pair.replace("-", "_")
+
+
+def wss_url(base_ws_url: str, domain: str = CONSTANTS.DEFAULT_DOMAIN) -> str:
+    """
+    Create a WebSocket URL for the given base URL and domain.
+
+    Args:
+        base_ws_url: The base WebSocket URL
+        domain: The domain to use
+
+    Returns:
+        Complete WebSocket URL
+    """
+    return base_ws_url
