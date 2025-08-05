@@ -100,7 +100,7 @@ class BackpackAPIUserStreamDataSource(UserStreamTrackerDataSource):
             self.logger().error(f"Error preparing WebSocket for auth: {e}")
             raise
 
-    async def _subscribe_channels(self, ws: WSAssistant):
+    async def _subscribe_channels(self, websocket_assistant: WSAssistant):
         """
         Subscribe to private user data channels using Backpack's authentication format.
 
@@ -108,7 +108,7 @@ class BackpackAPIUserStreamDataSource(UserStreamTrackerDataSource):
         [verifying_key, signature, timestamp, window]
 
         Args:
-            ws: Connected WebSocket assistant
+            websocket_assistant: Connected WebSocket assistant
         """
         try:
             # Get authenticated subscription parameters
@@ -133,7 +133,7 @@ class BackpackAPIUserStreamDataSource(UserStreamTrackerDataSource):
 
             # Send subscription request (authentication already included in payload)
             subscribe_request = WSJSONRequest(payload=subscription_payload, is_auth_required=False)
-            await ws.send(subscribe_request)
+            await websocket_assistant.send(subscribe_request)
 
             self.logger().info(f"Subscribed to Backpack private channels: {streams}")
             self.logger().info(f"Subscription payload: {subscription_payload}")
@@ -142,7 +142,7 @@ class BackpackAPIUserStreamDataSource(UserStreamTrackerDataSource):
             print("   🔍 Waiting for subscription responses...")
             try:
                 for i in range(3):  # Check for 3 seconds
-                    message = await asyncio.wait_for(ws.receive(), timeout=1.0)
+                    message = await asyncio.wait_for(websocket_assistant.receive(), timeout=1.0)
                     if message:
                         print(f"      📩 Subscription response {i+1}: {message}")
                     await asyncio.sleep(1)

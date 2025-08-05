@@ -23,7 +23,7 @@ API_VERSION = "/api/v1"
 WAPI_VERSION = "/wapi/v1"
 
 # Public API Endpoints
-PING_PATH_URL = "/ping"
+PING_PATH_URL = "/api/v1/ping"
 STATUS_PATH_URL = "/status"
 TIME_PATH_URL = "/time"
 MARKETS_PATH_URL = "/markets"

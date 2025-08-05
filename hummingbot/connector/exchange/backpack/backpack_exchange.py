@@ -13,9 +13,10 @@ from hummingbot.connector.trading_rule import TradingRule
 from hummingbot.core.data_type.common import OrderType, TradeType
 from hummingbot.core.data_type.in_flight_order import InFlightOrder, OrderUpdate, TradeUpdate
 from hummingbot.core.data_type.order_book_tracker_data_source import OrderBookTrackerDataSource
-from hummingbot.core.data_type.trade_fee import TradeFeeBase
+from hummingbot.core.data_type.trade_fee import TokenAmount, TradeFeeBase
 from hummingbot.core.data_type.user_stream_tracker_data_source import UserStreamTrackerDataSource
 from hummingbot.core.utils.estimate_fee import build_trade_fee
+from hummingbot.core.web_assistant.connections.data_types import RESTMethod
 from hummingbot.core.web_assistant.web_assistants_factory import WebAssistantsFactory
 
 if TYPE_CHECKING:
@@ -250,6 +251,39 @@ class BackpackExchange(ExchangePyBase):
         exchange_info = await self._api_get(path_url=CONSTANTS.MARKETS_PATH_URL)
         return exchange_info
 
+    async def _make_network_check_request(self):
+        """
+        Override network check to handle Backpack's plain text 'pong' response.
+
+        Backpack's /api/v1/ping returns plain text "pong", not JSON.
+        We need to use the REST assistant directly to avoid JSON parsing.
+        """
+        try:
+            rest_assistant = await self._web_assistants_factory.get_rest_assistant()
+            url = self.web_utils.public_rest_url(path_url=self.check_network_request_path, domain=self._domain)
+
+            # Use execute_request_and_get_response to get RESTResponse object, then call .text()
+            rest_response = await rest_assistant.execute_request_and_get_response(
+                url=url,
+                method=RESTMethod.GET,
+                throttler_limit_id=self.check_network_request_path
+            )
+
+            # Get the plain text response (not JSON)
+            response_text = await rest_response.text()
+
+            # Check if response is the expected "pong"
+            if response_text.strip().lower() == "pong":
+                self.logger().debug("Network check successful: received 'pong' response")
+                return response_text
+            else:
+                self.logger().warning(f"Unexpected ping response: {response_text}")
+                return response_text
+
+        except Exception as e:
+            self.logger().error(f"Network check request failed: {e}")
+            raise
+
     async def _get_trading_pair_from_exchange_symbol_map(self):
         """Build the mapping between exchange symbols and trading pairs."""
         async with self._mapping_initialization_lock:
@@ -454,7 +488,10 @@ class BackpackExchange(ExchangePyBase):
             trading_rules = []
             markets_data = exchange_info_dict if isinstance(exchange_info_dict, list) else exchange_info_dict.get("markets", [])
 
-            for market_info in markets_data:
+            # Import the validation function
+            from hummingbot.connector.exchange.backpack import backpack_utils
+
+            for market_info in filter(backpack_utils.is_exchange_information_valid, markets_data):
                 try:
                     # Extract symbol information
                     exchange_symbol = market_info.get("symbol")
@@ -462,12 +499,7 @@ class BackpackExchange(ExchangePyBase):
                         self.logger().debug(f"Skipping market with no symbol: {market_info}")
                         continue
 
-                    # Skip if market is not active or not a tradeable type
-                    order_book_state = market_info.get("orderBookState", "").upper()
-
-                    if order_book_state != "OPEN":
-                        self.logger().debug(f"Skipping market {exchange_symbol} with state {order_book_state}")
-                        continue
+                    # Market validation is already done by the filter function
 
                     # Convert to Hummingbot trading pair format using base and quote symbols
                     base_symbol = market_info.get("baseSymbol", "")
@@ -626,10 +658,105 @@ class BackpackExchange(ExchangePyBase):
             # Don't raise exception - fee updates should be non-blocking
 
     async def _all_trade_updates_for_order(self, order: InFlightOrder) -> List[TradeUpdate]:
-        """Get all trade updates for an order."""
-        # TODO: Implement in Phase 3 - Private API
-        # This will use GET /wapi/v1/history/fills endpoint
-        return []
+        """
+        Get all trade updates for a specific order from Backpack.
+
+        Uses the GET /history/fills endpoint to fetch trade history for the order.
+
+        Args:
+            order: InFlightOrder object containing order details
+
+        Returns:
+            List of TradeUpdate objects representing all fills for this order
+        """
+        trade_updates = []
+
+        if order.exchange_order_id is None:
+            self.logger().debug(f"Order {order.client_order_id} has no exchange order ID")
+            return trade_updates
+
+        try:
+            # Convert trading pair to exchange format
+            symbol = await self.exchange_symbol_associated_to_pair(trading_pair=order.trading_pair)
+
+            # Query fills for this specific order
+            params = {
+                "symbol": symbol,
+                "orderId": order.exchange_order_id
+            }
+
+            # Get fills from Backpack API
+            fills_response = await self._api_get(
+                path_url=CONSTANTS.HISTORY_FILLS_PATH_URL,
+                params=params,
+                is_auth_required=True,
+                limit_id=CONSTANTS.HISTORY_FILLS_PATH_URL
+            )
+
+            # Process each fill
+            for fill in fills_response:
+                try:
+                    # Extract fill information
+                    trade_id = str(fill.get("id", ""))
+                    fill_timestamp = fill.get("timestamp", self._time_synchronizer.time() * 1000) / 1000.0
+                    fill_price = Decimal(str(fill.get("price", "0")))
+                    fill_quantity = Decimal(str(fill.get("quantity", "0")))
+
+                    # Calculate fill amounts
+                    fill_base_amount = fill_quantity
+                    fill_quote_amount = fill_base_amount * fill_price
+
+                    # Extract fee information if available
+                    fee_amount = Decimal(str(fill.get("fee", "0")))
+                    fee_asset = fill.get("feeSymbol", order.quote_asset)
+
+                    # Create fee object
+                    if fee_amount > 0:
+                        fee = TradeFeeBase.new_spot_fee(
+                            fee_schema=self.trade_fee_schema(),
+                            trade_type=order.trade_type,
+                            percent_token=fee_asset,
+                            flat_fees=[TokenAmount(amount=fee_amount, token=fee_asset)]
+                        )
+                    else:
+                        # Use default fee calculation if no fee info provided
+                        fee = TradeFeeBase.new_spot_fee(
+                            fee_schema=self.trade_fee_schema(),
+                            trade_type=order.trade_type,
+                            percent_token=order.quote_asset,
+                        )
+
+                    # Create trade update
+                    trade_update = TradeUpdate(
+                        trade_id=trade_id,
+                        client_order_id=order.client_order_id,
+                        exchange_order_id=order.exchange_order_id,
+                        trading_pair=order.trading_pair,
+                        fee=fee,
+                        fill_base_amount=fill_base_amount,
+                        fill_quote_amount=fill_quote_amount,
+                        fill_price=fill_price,
+                        fill_timestamp=fill_timestamp,
+                    )
+
+                    trade_updates.append(trade_update)
+                    self.logger().debug(f"Retrieved trade update for order {order.client_order_id}: "
+                                        f"{fill_base_amount} @ {fill_price} (ID: {trade_id})")
+
+                except Exception as e:
+                    self.logger().error(f"Error processing fill {fill}: {e}")
+                    continue
+
+            self.logger().info(f"Retrieved {len(trade_updates)} trade updates for order {order.client_order_id}")
+
+        except Exception as e:
+            # Handle 404 or other errors gracefully
+            if "404" in str(e) or "NOT_FOUND" in str(e):
+                self.logger().debug(f"No fills found for order {order.client_order_id}")
+            else:
+                self.logger().error(f"Failed to get trade updates for order {order.client_order_id}: {e}")
+
+        return trade_updates
 
     async def _request_order_status(self, tracked_order: InFlightOrder) -> OrderUpdate:
         """
@@ -696,7 +823,235 @@ class BackpackExchange(ExchangePyBase):
                 )
 
     async def _user_stream_event_listener(self):
-        """Listen to user stream events."""
-        # TODO: Implement in Phase 3 - Private API
-        # This will process WebSocket events for orders, trades, balances
-        pass
+        """
+        Process user stream events from Backpack WebSocket.
+
+        This function runs in background continuously processing the events received from the exchange by the user
+        stream data source. It keeps reading events from the queue until the task is interrupted.
+        The events received are order updates, position updates, and trade events.
+
+        Backpack WebSocket event format:
+        - orderAccepted/orderCancelled events with stream: 'account.orderUpdate'
+        - Position updates with stream: 'account.positionUpdate'
+        """
+        async for event_message in self._iter_user_event_queue():
+            try:
+                event_stream = event_message.get("stream", "")
+                event_data = event_message.get("data", {})
+
+                if not event_data:
+                    continue
+
+                # Handle order updates (account.orderUpdate and symbol-specific variants)
+                if "orderUpdate" in event_stream:
+                    await self._process_order_event(event_data)
+
+                # Handle position updates (account.positionUpdate and symbol-specific variants)
+                elif "positionUpdate" in event_stream:
+                    await self._process_position_event(event_data)
+
+                # Handle RFQ updates (if needed in future)
+                elif "rfqUpdate" in event_stream:
+                    self.logger().debug(f"Received RFQ update: {event_data}")
+                    # RFQ updates are not needed for spot trading, but we log them for debugging
+
+                else:
+                    self.logger().debug(f"Unhandled user stream event: {event_message}")
+
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.logger().error("Unexpected error in user stream listener loop.", exc_info=True)
+                await self._sleep(5.0)
+
+    async def _process_order_event(self, event_data: Dict[str, Any]):
+        """
+        Process order-related events from Backpack WebSocket.
+
+        Event format:
+        {
+            "E": 1748288615134547,    # Event timestamp
+            "O": "USER",              # Order origin
+            "S": "Ask",               # Side (Ask = Sell, Bid = Buy)
+            "T": 1748288615133255,    # Transaction timestamp
+            "V": "RejectTaker",       # Self trade prevention
+            "X": "New",               # Order status (New, Cancelled, Filled, PartiallyFilled)
+            "Z": "0",                 # Cumulative filled quantity (base)
+            "c": 123456789,           # Client order ID (32-bit integer)
+            "e": "orderAccepted",     # Event type (orderAccepted, orderCancelled, orderFilled)
+            "f": "GTC",               # Time in force
+            "i": "114575842681290753", # Exchange order ID
+            "o": "LIMIT",             # Order type (LIMIT, MARKET)
+            "p": "178.15",            # Price
+            "q": "20.03",             # Quantity
+            "r": false,               # Reduce only flag
+            "s": "SOL_USDC",          # Symbol
+            "t": null,                # Trade ID (filled when trade occurs)
+            "z": "0"                  # Last filled quantity
+        }
+        """
+        try:
+            # Extract order information
+            exchange_order_id = str(event_data.get("i", ""))
+            symbol = event_data.get("s", "")
+            order_status = event_data.get("X", "")
+            event_type = event_data.get("e", "")
+            client_order_id_raw = event_data.get("c")
+
+            if not exchange_order_id or not symbol:
+                self.logger().debug(f"Missing order ID or symbol in event: {event_data}")
+                return
+
+            # Convert symbol to trading pair format
+            try:
+                trading_pair = await self.trading_pair_associated_to_exchange_symbol(symbol=symbol)
+            except Exception as e:
+                self.logger().warning(f"Could not convert symbol {symbol} to trading pair: {e}")
+                return
+
+            # Find client order ID from our tracked orders using exchange order ID
+            client_order_id = None
+            tracked_order = None
+
+            # First try to find by exchange order ID
+            for order_id, order in self._order_tracker.all_updatable_orders.items():
+                if order.exchange_order_id == exchange_order_id:
+                    client_order_id = order_id
+                    tracked_order = order
+                    break
+
+            # If we have a client_order_id from the event, verify it matches
+            if client_order_id_raw and tracked_order:
+                # Convert Hummingbot order ID back to 32-bit integer for comparison
+                expected_client_id = int(hashlib.md5(client_order_id.encode()).hexdigest()[:8], 16) % (2**32 - 1)
+                if expected_client_id != client_order_id_raw:
+                    self.logger().warning(f"Client ID mismatch: expected {expected_client_id}, got {client_order_id_raw}")
+
+            if not tracked_order:
+                self.logger().debug(f"Order {exchange_order_id} not found in tracked orders")
+                return
+
+            # Process trade events (fills)
+            if event_type in ["orderFilled", "orderAccepted"] and event_data.get("t") is not None:
+                await self._process_trade_fill(event_data, tracked_order)
+
+            # Process order status updates
+            if order_status in CONSTANTS.ORDER_STATE:
+                timestamp = int(event_data.get("E", self._time_synchronizer.time() * 1000)) / 1000.0
+
+                order_update = OrderUpdate(
+                    trading_pair=trading_pair,
+                    update_timestamp=timestamp,
+                    new_state=CONSTANTS.ORDER_STATE[order_status],
+                    client_order_id=client_order_id,
+                    exchange_order_id=exchange_order_id,
+                )
+
+                self._order_tracker.process_order_update(order_update=order_update)
+                self.logger().info(f"Processed order update: {client_order_id} -> {order_status}")
+
+        except Exception as e:
+            self.logger().error(f"Error processing order event: {e}", exc_info=True)
+
+    async def _process_trade_fill(self, event_data: Dict[str, Any], tracked_order: InFlightOrder):
+        """Process trade fill events from order updates."""
+        try:
+            trade_id = str(event_data.get("t", ""))
+            if not trade_id or trade_id == "null":
+                return  # No actual trade occurred
+
+            fill_price = Decimal(str(event_data.get("p", "0")))
+            last_fill_qty = Decimal(str(event_data.get("z", "0")))
+
+            if last_fill_qty == 0:
+                return  # No fill quantity
+
+            # Calculate fill amounts
+            fill_base_amount = last_fill_qty
+            fill_quote_amount = fill_base_amount * fill_price
+
+            # Create fee (Backpack doesn't provide fee info in WebSocket, so use default)
+            fee = TradeFeeBase.new_spot_fee(
+                fee_schema=self.trade_fee_schema(),
+                trade_type=tracked_order.trade_type,
+                percent_token=tracked_order.quote_asset,  # Assume fee in quote asset
+            )
+
+            # Create trade update
+            trade_update = TradeUpdate(
+                trade_id=trade_id,
+                client_order_id=tracked_order.client_order_id,
+                exchange_order_id=tracked_order.exchange_order_id,
+                trading_pair=tracked_order.trading_pair,
+                fee=fee,
+                fill_base_amount=fill_base_amount,
+                fill_quote_amount=fill_quote_amount,
+                fill_price=fill_price,
+                fill_timestamp=int(event_data.get("T", self._time_synchronizer.time() * 1000)) / 1000.0,
+            )
+
+            self._order_tracker.process_trade_update(trade_update)
+            self.logger().info(f"Processed trade fill: {tracked_order.client_order_id} - {fill_base_amount} @ {fill_price}")
+
+        except Exception as e:
+            self.logger().error(f"Error processing trade fill: {e}", exc_info=True)
+
+    async def _process_position_event(self, event_data: Dict[str, Any]):
+        """
+        Process position/balance update events from Backpack WebSocket.
+
+        Based on real Backpack position update events, this appears to be perpetual futures position data.
+        For spot trading, we may not need to process these events for balance updates,
+        as balance updates come through REST API calls.
+
+        Real Backpack position event format:
+        {
+            "B": "164.59",            # Unknown field B
+            "E": 1754373041730003,    # Event timestamp
+            "M": "168.16672645",      # Mark price or similar
+            "P": "0.035767",          # PnL or percentage
+            "Q": "0.01",              # Quantity
+            "T": 1754373041730004,    # Transaction timestamp
+            "b": "164.6098",          # Bid or balance related
+            "f": "0.02",              # Fee or funding
+            "i": 4681711685,          # Position/instrument ID
+            "l": "0",                 # Leverage or locked
+            "m": "0.0125",            # Margin or similar
+            "n": "1.6816672645",      # Notional value
+            "p": "0",                 # Price or position
+            "q": "0.01",              # Quantity (duplicate?)
+            "s": "SOL_USDC_PERP"      # Symbol (note: PERP not SPOT)
+        }
+        """
+        try:
+            symbol = event_data.get("s", "")
+
+            # Check if this is a perpetual futures position update (contains "_PERP")
+            if "_PERP" in symbol:
+                self.logger().debug(f"Received perpetual futures position update for {symbol}: {event_data}")
+                # For spot trading connector, we typically don't process perpetual positions
+                # These events are for futures trading, not spot balance updates
+                return
+
+            # For spot trading, balance updates usually come through different event types
+            # or through REST API polling. The position events we're seeing appear to be
+            # perpetual futures related.
+
+            # If in the future Backpack sends spot balance updates through position events,
+            # we can implement balance parsing here following the Binance pattern:
+            #
+            # Example implementation for balance updates (when available):
+            # if "balances" in event_data:  # Hypothetical balance array
+            #     for balance_info in event_data["balances"]:
+            #         asset = balance_info.get("asset", "")
+            #         available = Decimal(str(balance_info.get("available", "0")))
+            #         locked = Decimal(str(balance_info.get("locked", "0")))
+            #         total = available + locked
+            #         self._account_available_balances[asset] = available
+            #         self._account_balances[asset] = total
+            #         self.logger().info(f"Updated balance for {asset}: available={available}, total={total}")
+
+            self.logger().debug(f"Processed position event for {symbol} (no balance updates for spot trading)")
+
+        except Exception as e:
+            self.logger().error(f"Error processing position event: {e}", exc_info=True)
