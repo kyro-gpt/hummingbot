@@ -109,10 +109,12 @@ class BackpackAuth(AuthBase):
 
         # Add body parameters (sorted alphabetically)
         for key, value in sorted(body_params.items()):
-            # Remove quotes from string values as per Rust implementation
-            if isinstance(value, str):
-                value = value.strip('"')
-            parts.append(f"{key}={value}")
+            # Convert value to string and remove quotes from JSON string values
+            # as per Rust implementation: v.trim_start_matches('"').trim_end_matches('"')
+            value_str = str(value)
+            if value_str.startswith('"') and value_str.endswith('"'):
+                value_str = value_str[1:-1]  # Remove surrounding quotes
+            parts.append(f"{key}={value_str}")
 
         # Add timestamp and window
         parts.append(f"timestamp={timestamp}")
@@ -144,7 +146,14 @@ class BackpackAuth(AuthBase):
             The authenticated request with required headers
         """
         # Extract path from URL
-        path = request.url.path
+        if hasattr(request.url, 'path'):
+            path = request.url.path
+        else:
+            # Handle case where url is a string
+            from urllib.parse import urlparse
+            parsed_url = urlparse(str(request.url))
+            path = parsed_url.path
+
         method = request.method.value
 
         # Get instruction type
@@ -190,11 +199,37 @@ class BackpackAuth(AuthBase):
             "X-Timestamp": str(timestamp),
             "X-Window": str(self.DEFAULT_WINDOW),
             "X-Signature": signature,
-            "Content-Type": "application/json; charset=utf-8"
+            "User-Agent": "bpx-python-client"
         })
+
+        # Don't set Content-Type here - let RESTAssistant handle it
+        # This avoids signature mismatches when RESTAssistant overwrites our Content-Type
 
         request.headers = headers
         return request
+
+    def websocket_login_parameters(self) -> Dict[str, Any]:
+        """
+        Generate WebSocket authentication parameters for Backpack.
+
+        Returns:
+            Dictionary containing authentication parameters for WebSocket login
+        """
+        timestamp = self._get_timestamp()
+
+        # WebSocket authentication uses "subscribe" instruction format
+        signing_string = f"instruction=subscribe&timestamp={timestamp}&window={self.DEFAULT_WINDOW}"
+        signature = self._generate_signature(signing_string)
+
+        # Get the public key (verifying key) in base64 format
+        # Use the same API key that was validated during initialization
+        verifying_key = self.api_key
+
+        return {
+            "method": "SUBSCRIBE",
+            "params": [],  # Will be set by the user stream
+            "signature": [verifying_key, signature, str(timestamp), str(self.DEFAULT_WINDOW)]
+        }
 
     async def ws_authenticate(self, request: WSRequest) -> WSRequest:
         """

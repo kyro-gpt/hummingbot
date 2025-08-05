@@ -213,8 +213,11 @@ MARKET_TYPE_SPOT = "spot"
 MARKET_TYPE_FUTURE = "future"
 
 # Client Order ID Configuration
-MAX_ORDER_ID_LEN = 32
-HBOT_ORDER_ID_PREFIX = "HBOT"
+MAX_ORDER_ID_LEN = 32  # For string-based IDs (not used by Backpack)
+HBOT_ORDER_ID_PREFIX = "HBOT"  # For string-based IDs (not used by Backpack)
+
+# Backpack uses 32-bit unsigned integer client IDs
+MAX_CLIENT_ID_BITS = 32  # 32-bit unsigned integer (0 to 4294967295)
 
 # Default Values
 DEFAULT_WINDOW = 5000  # 5 seconds

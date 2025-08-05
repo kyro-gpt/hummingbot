@@ -179,9 +179,16 @@ class BackpackExchange(ExchangePyBase):
 
     def _create_user_stream_data_source(self) -> UserStreamTrackerDataSource:
         """Creates the user stream data source."""
-        # TODO: Implement BackpackAPIUserStreamDataSource in Phase 3
-        # For now, return None - this will be implemented in Milestone 3.1
-        return None
+        from hummingbot.connector.exchange.backpack.backpack_api_user_stream_data_source import (
+            BackpackAPIUserStreamDataSource,
+        )
+        return BackpackAPIUserStreamDataSource(
+            auth=self.authenticator,
+            trading_pairs=self._trading_pairs,
+            connector=self,
+            api_factory=self._web_assistants_factory,
+            domain=self._domain
+        )
 
     def _get_fee(self,
                  base_currency: str,
