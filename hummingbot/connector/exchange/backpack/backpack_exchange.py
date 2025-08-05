@@ -422,10 +422,117 @@ class BackpackExchange(ExchangePyBase):
             return False
 
     async def _format_trading_rules(self, exchange_info_dict: Dict[str, Any]) -> List[TradingRule]:
-        """Format trading rules from exchange info."""
-        # TODO: Implement based on Backpack's market info format
-        # For now, return empty list - this will be implemented when we have market data
-        return []
+        """
+        Format trading rules from Backpack's market info.
+
+        Expected exchange_info_dict format from /markets endpoint:
+        [
+            {
+                "symbol": "SOL_USDC",
+                "baseSymbol": "SOL",
+                "quoteSymbol": "USDC",
+                "marketType": "SPOT",
+                "filters": {
+                    "price": {
+                        "minPrice": "0.01",
+                        "maxPrice": None,
+                        "tickSize": "0.01",
+                        "maxMultiplier": "1.25",
+                        "minMultiplier": "0.75",
+                        ...
+                    },
+                    "quantity": {
+                        "minQuantity": "0.01",
+                        "maxQuantity": None,
+                        "stepSize": "0.01"
+                    }
+                }
+            }
+        ]
+        """
+        try:
+            trading_rules = []
+            markets_data = exchange_info_dict if isinstance(exchange_info_dict, list) else exchange_info_dict.get("markets", [])
+
+            for market_info in markets_data:
+                try:
+                    # Extract symbol information
+                    exchange_symbol = market_info.get("symbol")
+                    if not exchange_symbol:
+                        self.logger().debug(f"Skipping market with no symbol: {market_info}")
+                        continue
+
+                    # Skip if market is not active or not a tradeable type
+                    order_book_state = market_info.get("orderBookState", "").upper()
+
+                    if order_book_state != "OPEN":
+                        self.logger().debug(f"Skipping market {exchange_symbol} with state {order_book_state}")
+                        continue
+
+                    # Convert to Hummingbot trading pair format using base and quote symbols
+                    base_symbol = market_info.get("baseSymbol", "")
+                    quote_symbol = market_info.get("quoteSymbol", "")
+
+                    if not base_symbol or not quote_symbol:
+                        self.logger().warning(f"Missing base/quote symbols for {exchange_symbol}")
+                        continue
+
+                    # Create trading pair in Hummingbot format: BASE-QUOTE
+                    trading_pair = f"{base_symbol.upper()}-{quote_symbol.upper()}"
+
+                    # Extract filter information
+                    filters = market_info.get("filters", {})
+
+                    # Price filter
+                    price_filter = filters.get("price", {})
+                    min_price_increment = Decimal(str(price_filter.get("tickSize", "0.01")))
+
+                    # Quantity filter
+                    quantity_filter = filters.get("quantity", {})
+                    min_order_size = Decimal(str(quantity_filter.get("minQuantity", "0.001")))
+                    min_base_amount_increment = Decimal(str(quantity_filter.get("stepSize", "0.001")))
+
+                    # Calculate min notional size - use a reasonable default if not specified
+                    # Backpack doesn't seem to have a separate notional filter, so we'll calculate a default
+                    min_price = price_filter.get("minPrice")
+                    if min_price and min_price != "0":
+                        # Use min_order_size * min_price as min_notional
+                        min_notional_size = min_order_size * Decimal(str(min_price))
+                    else:
+                        # Default minimum notional of $1 USD equivalent
+                        min_notional_size = Decimal("1.0")
+
+                    # Create trading rule
+                    trading_rule = TradingRule(
+                        trading_pair=trading_pair,
+                        min_order_size=min_order_size,
+                        min_price_increment=min_price_increment,
+                        min_base_amount_increment=min_base_amount_increment,
+                        min_notional_size=min_notional_size
+                    )
+
+                    trading_rules.append(trading_rule)
+                    self.logger().debug(f"Created trading rule for {trading_pair} ({exchange_symbol}): "
+                                        f"min_order_size={min_order_size}, "
+                                        f"min_price_increment={min_price_increment}, "
+                                        f"min_notional_size={min_notional_size}")
+
+                except Exception as e:
+                    # More detailed error logging
+                    symbol = market_info.get("symbol", "unknown")
+                    self.logger().debug(f"Error parsing trading rule for market {symbol}: {e}")
+                    self.logger().debug(f"Market data: {market_info}")
+                    continue
+
+            self.logger().info(f"Successfully parsed {len(trading_rules)} trading rules from {len(markets_data)} markets")
+            return trading_rules
+
+        except Exception as e:
+            self.logger().error(f"Failed to format trading rules: {e}")
+            import traceback
+            self.logger().debug(f"Full traceback: {traceback.format_exc()}")
+            # Return empty list on error - don't block connector initialization
+            return []
 
     async def _initialize_trading_pair_symbols_from_exchange_info(self, exchange_info: Dict[str, Any]):
         """Initialize trading pair symbols from exchange info."""
@@ -433,16 +540,90 @@ class BackpackExchange(ExchangePyBase):
         self._trading_pair_symbol_map = await self._init_trading_pair_symbols(exchange_info)
 
     async def _update_balances(self):
-        """Update account balances."""
-        # TODO: Implement in Phase 3 - Private API
-        # This will use GET /api/v1/capital endpoint
-        pass
+        """
+        Update account balances by fetching from Backpack's /capital endpoint.
+
+        Expected response format:
+        {
+            "USDC": {"available": "46.157501635", "locked": "0", "staked": "0"},
+            "SOL": {"available": "0.019109", "locked": "0", "staked": "0"},
+            "POINTS": {"available": "5", "locked": "0", "staked": "0"}
+        }
+        """
+        try:
+            local_asset_names = set(self._account_balances.keys())
+            remote_asset_names = set()
+
+            # Fetch account balances from Backpack
+            balance_info = await self._api_get(
+                path_url=CONSTANTS.CAPITAL_PATH_URL,
+                is_auth_required=True
+            )
+
+            # Process each asset balance
+            for asset_name, balance_data in balance_info.items():
+                # Skip non-tradeable assets like POINTS
+                if asset_name in ["POINTS"]:
+                    continue
+
+                # Extract available and locked balances
+                available_balance = Decimal(balance_data.get("available", "0"))
+                locked_balance = Decimal(balance_data.get("locked", "0"))
+                staked_balance = Decimal(balance_data.get("staked", "0"))
+
+                # Total balance includes available + locked + staked
+                total_balance = available_balance + locked_balance + staked_balance
+
+                # Update balance tracking
+                self._account_available_balances[asset_name] = available_balance
+                self._account_balances[asset_name] = total_balance
+                remote_asset_names.add(asset_name)
+
+                self.logger().debug(f"Updated balance for {asset_name}: "
+                                    f"available={available_balance}, total={total_balance}")
+
+            # Remove assets that are no longer in the remote response
+            asset_names_to_remove = local_asset_names.difference(remote_asset_names)
+            for asset_name in asset_names_to_remove:
+                if asset_name in self._account_available_balances:
+                    del self._account_available_balances[asset_name]
+                if asset_name in self._account_balances:
+                    del self._account_balances[asset_name]
+                self.logger().debug(f"Removed balance for {asset_name}")
+
+            self.logger().info(f"Successfully updated balances for {len(remote_asset_names)} assets")
+
+        except Exception as e:
+            self.logger().error(f"Failed to update balances: {e}")
+            # Don't raise exception - balance updates should be non-blocking
 
     async def _update_trading_fees(self):
-        """Update trading fees information."""
-        # TODO: Implement when we have account-specific fee information
-        # For now, use default fees from constants
-        pass
+        """
+        Update trading fees information.
+
+        Note: Backpack may not have a specific endpoint for account-level trading fees.
+        For now, we'll use reasonable default values and update this when we have
+        more information about Backpack's fee structure.
+        """
+        try:
+            # Default fee structure for Backpack (these are typical values)
+            # Update these values if Backpack provides account-specific fee information
+            default_maker_fee = Decimal("0.0020")  # 0.20% (20 basis points)
+            default_taker_fee = Decimal("0.0025")  # 0.25% (25 basis points)
+
+            # Set fees for all trading pairs
+            for trading_pair in self._trading_pairs or []:
+                self._trading_fees[trading_pair] = {
+                    "maker": default_maker_fee,
+                    "taker": default_taker_fee
+                }
+
+            self.logger().info(f"Updated trading fees: maker={default_maker_fee}, taker={default_taker_fee}")
+            self.logger().debug(f"Applied fees to {len(self._trading_fees)} trading pairs")
+
+        except Exception as e:
+            self.logger().error(f"Failed to update trading fees: {e}")
+            # Don't raise exception - fee updates should be non-blocking
 
     async def _all_trade_updates_for_order(self, order: InFlightOrder) -> List[TradeUpdate]:
         """Get all trade updates for an order."""
