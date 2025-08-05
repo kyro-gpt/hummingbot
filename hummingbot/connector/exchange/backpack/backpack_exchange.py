@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
@@ -317,18 +318,108 @@ class BackpackExchange(ExchangePyBase):
         """
         Place an order on Backpack exchange.
 
+        Args:
+            order_id: Hummingbot's client order ID
+            trading_pair: Trading pair in Hummingbot format (e.g., "SOL-USDC")
+            amount: Order amount
+            trade_type: BUY or SELL
+            order_type: LIMIT, MARKET, etc.
+            price: Order price
+
         Returns:
             Tuple of (exchange_order_id, timestamp)
         """
-        # TODO: Implement in Phase 3 - Private API
-        # This will use POST /api/v1/order endpoint
-        raise NotImplementedError("Order placement will be implemented in Phase 3")
+        try:
+            # Convert trading pair to exchange format
+            symbol = await self.exchange_symbol_associated_to_pair(trading_pair=trading_pair)
+
+            # Generate client ID from Hummingbot order ID
+            # Backpack expects 32-bit unsigned integer, so we hash the order_id
+            client_id = int(hashlib.md5(order_id.encode()).hexdigest()[:8], 16) % (2**32 - 1)
+
+            # Convert order parameters to Backpack format
+            side = "Bid" if trade_type == TradeType.BUY else "Ask"
+
+            # Map order types
+            if order_type == OrderType.LIMIT:
+                order_type_str = "Limit"
+            elif order_type == OrderType.MARKET:
+                order_type_str = "Market"
+            else:
+                raise ValueError(f"Unsupported order type: {order_type}")
+
+            # Build order data
+            order_data = {
+                "symbol": symbol,
+                "side": side,
+                "orderType": order_type_str,
+                "quantity": str(amount),
+                "clientId": client_id
+            }
+
+            # Add price for limit orders
+            if order_type == OrderType.LIMIT:
+                order_data["price"] = str(price)
+                order_data["timeInForce"] = "GTC"  # Good Till Cancelled
+
+            # Place order via REST API
+            response = await self._api_post(
+                path_url=CONSTANTS.ORDER_PATH_URL,
+                data=order_data,
+                is_auth_required=True
+            )
+
+            # Extract exchange order ID and timestamp
+            exchange_order_id = str(response["id"])
+            timestamp = response["createdAt"] / 1000.0  # Convert milliseconds to seconds
+
+            return exchange_order_id, timestamp
+
+        except Exception as e:
+            self.logger().error(f"Failed to place order {order_id}: {e}")
+            raise
 
     async def _place_cancel(self, order_id: str, tracked_order: InFlightOrder):
-        """Cancel an order on Backpack exchange."""
-        # TODO: Implement in Phase 3 - Private API
-        # This will use DELETE /api/v1/order endpoint
-        raise NotImplementedError("Order cancellation will be implemented in Phase 3")
+        """
+        Cancel an order on Backpack exchange.
+
+        Args:
+            order_id: Hummingbot's client order ID
+            tracked_order: InFlightOrder object containing order details
+
+        Returns:
+            bool: True if cancellation was successful, False otherwise
+        """
+        try:
+            # Convert trading pair to exchange format
+            symbol = await self.exchange_symbol_associated_to_pair(trading_pair=tracked_order.trading_pair)
+
+            # Cancel using exchange order ID (stored in tracked_order.exchange_order_id)
+            cancel_data = {
+                "symbol": symbol,
+                "orderId": tracked_order.exchange_order_id
+            }
+
+            # Cancel order via REST API
+            response = await self._api_delete(
+                path_url=CONSTANTS.ORDER_PATH_URL,
+                data=cancel_data,
+                is_auth_required=True
+            )
+
+            # Check if cancellation was successful
+            is_cancelled = response.get("status") == "Cancelled"
+
+            if is_cancelled:
+                self.logger().info(f"Successfully cancelled order {order_id} (exchange ID: {tracked_order.exchange_order_id})")
+            else:
+                self.logger().warning(f"Order cancellation may have failed for {order_id}. Response: {response}")
+
+            return is_cancelled
+
+        except Exception as e:
+            self.logger().error(f"Failed to cancel order {order_id}: {e}")
+            return False
 
     async def _format_trading_rules(self, exchange_info_dict: Dict[str, Any]) -> List[TradingRule]:
         """Format trading rules from exchange info."""
@@ -360,16 +451,68 @@ class BackpackExchange(ExchangePyBase):
         return []
 
     async def _request_order_status(self, tracked_order: InFlightOrder) -> OrderUpdate:
-        """Request order status from exchange."""
-        # TODO: Implement in Phase 3 - Private API
-        # This will use GET /api/v1/order endpoint
-        return OrderUpdate(
-            trading_pair=tracked_order.trading_pair,
-            update_timestamp=0,
-            new_state=tracked_order.current_state,
-            client_order_id=tracked_order.client_order_id,
-            exchange_order_id=tracked_order.exchange_order_id,
-        )
+        """
+        Request order status from Backpack exchange.
+
+        Args:
+            tracked_order: InFlightOrder object to check status for
+
+        Returns:
+            OrderUpdate with current order status
+        """
+        try:
+            # Convert trading pair to exchange format
+            symbol = await self.exchange_symbol_associated_to_pair(trading_pair=tracked_order.trading_pair)
+
+            # Query order status using exchange order ID
+            params = {
+                "symbol": symbol,
+                "orderId": tracked_order.exchange_order_id
+            }
+
+            # Get order status via REST API
+            order_data = await self._api_get(
+                path_url=CONSTANTS.ORDER_PATH_URL,
+                params=params,
+                is_auth_required=True
+            )
+
+            # Map Backpack status to Hummingbot OrderState
+            backpack_status = order_data["status"]
+            new_state = CONSTANTS.ORDER_STATE.get(backpack_status, tracked_order.current_state)
+
+            # Create order update
+            order_update = OrderUpdate(
+                trading_pair=tracked_order.trading_pair,
+                update_timestamp=order_data.get("createdAt", self._time_synchronizer.time()) / 1000.0,  # Convert milliseconds to seconds
+                new_state=new_state,
+                client_order_id=tracked_order.client_order_id,
+                exchange_order_id=str(order_data["id"]),
+            )
+
+            return order_update
+
+        except Exception as e:
+            # Handle 404 error - order not found (likely cancelled)
+            if "404" in str(e) and "RESOURCE_NOT_FOUND" in str(e):
+                self.logger().info(f"Order {tracked_order.client_order_id} not found - likely cancelled")
+                return OrderUpdate(
+                    trading_pair=tracked_order.trading_pair,
+                    update_timestamp=self._time_synchronizer.time(),
+                    new_state=CONSTANTS.ORDER_STATE.get("Cancelled", tracked_order.current_state),
+                    client_order_id=tracked_order.client_order_id,
+                    exchange_order_id=tracked_order.exchange_order_id,
+                )
+            else:
+                self.logger().error(f"Failed to request order status for {tracked_order.client_order_id}: {e}")
+                # Return current state if request fails
+                return OrderUpdate(
+                    trading_pair=tracked_order.trading_pair,
+                    update_timestamp=self._time_synchronizer.time(),
+                    new_state=tracked_order.current_state,
+                    client_order_id=tracked_order.client_order_id,
+                    exchange_order_id=tracked_order.exchange_order_id,
+                )
 
     async def _user_stream_event_listener(self):
         """Listen to user stream events."""

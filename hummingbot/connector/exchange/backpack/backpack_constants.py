@@ -4,9 +4,11 @@ Backpack Exchange Constants
 This module contains all constants used by the Backpack exchange connector including
 API URLs, rate limits, order types, and other configuration values.
 """
-
 from hummingbot.core.api_throttler.data_types import RateLimit
 from hummingbot.core.data_type.common import OrderType
+
+# Order State Mapping for Hummingbot (Backpack status -> OrderState)
+from hummingbot.core.data_type.in_flight_order import OrderState
 
 # Exchange Information
 EXCHANGE_NAME = "backpack"
@@ -199,6 +201,15 @@ HB_ORDER_STATUS = {
     "FILLED": "FILLED",
     "CANCELED": "CANCELED",
     "EXPIRED": "EXPIRED",
+}
+
+ORDER_STATE = {
+    "New": OrderState.OPEN,
+    "PartiallyFilled": OrderState.PARTIALLY_FILLED,
+    "Filled": OrderState.FILLED,
+    "Cancelled": OrderState.CANCELED,  # Note: CANCELED not CANCELLED
+    "Expired": OrderState.FAILED,
+    "Rejected": OrderState.FAILED,
 }
 
 # Time in Force
