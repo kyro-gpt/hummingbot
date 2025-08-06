@@ -175,10 +175,56 @@ class BackpackAPIUserStreamDataSource(UserStreamTrackerDataSource):
         """
         Process individual event messages and route them to the appropriate queue.
 
-        Expected message formats (based on Backpack WebSocket API):
-        - Order updates: {"stream": "account.orderUpdate", "data": {...}}
-        - Fill updates: {"stream": "account.fills", "data": {...}}
-        - Balance updates: {"stream": "account.balances", "data": {...}}
+        Expected message formats (based on real Backpack WebSocket API):
+
+        - Order updates:
+        {
+            "stream": "account.orderUpdate",
+            "data": {
+                "E": 1754462606817679,     # Event time in microseconds
+                "O": "USER",              # Origin of the update
+                "S": "Bid",               # Side (Ask = Sell, Bid = Buy)
+                "T": 1754462606815843,    # Engine timestamp in microseconds
+                "V": "RejectTaker",       # Self trade prevention
+                "X": "New",               # Order state (New, Filled, Cancelled, etc.)
+                "Z": "0",                 # Cumulative filled quantity
+                "c": 2115950059,          # Client order ID (32-bit integer)
+                "e": "orderAccepted",     # Event type (orderAccepted, orderFilled, etc.)
+                "f": "GTC",               # Time in force
+                "i": "5012875717",        # Exchange order ID
+                "o": "LIMIT",             # Order type (LIMIT, MARKET)
+                "p": "140.00",            # Price
+                "q": "0.01",              # Quantity
+                "r": False,               # Reduce only flag
+                "s": "SOL_USDC",          # Symbol
+                "t": None,                # Trade ID (when trade occurs)
+                "z": "0",                 # Last filled quantity
+                "n": "30",                # Fee amount (when filled)
+                "N": "USDC"               # Fee symbol (when filled)
+            }
+        }
+
+        - Position updates:
+        {
+            "stream": "account.positionUpdate",
+            "data": {
+                "B": "164.59",            # Entry price
+                "E": 1754462601563677,    # Event time in microseconds
+                "M": "163.81034805",      # Mark price
+                "P": "-0.007796",         # PnL unrealized
+                "Q": "0.01",              # Net exposure quantity
+                "T": 1754462601563678,    # Engine timestamp in microseconds
+                "b": "164.6398",          # Break event price
+                "f": "0.02",              # Initial margin fraction
+                "i": 4681711685,          # Position ID
+                "l": "0",                 # Estimated liquidation price
+                "m": "0.0125",            # Maintenance margin fraction
+                "n": "1.6381034805",      # Net exposure notional
+                "p": "0",                 # PnL realized
+                "q": "0.01",              # Net quantity
+                "s": "SOL_USDC_PERP"      # Symbol
+            }
+        }
 
         Args:
             event_message: Raw WebSocket event message

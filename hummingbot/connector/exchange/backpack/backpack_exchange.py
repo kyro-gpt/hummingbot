@@ -5,7 +5,11 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from bidict import bidict
 
-from hummingbot.connector.exchange.backpack import backpack_constants as CONSTANTS, backpack_web_utils as web_utils
+from hummingbot.connector.exchange.backpack import (
+    backpack_constants as CONSTANTS,
+    backpack_utils,
+    backpack_web_utils as web_utils,
+)
 from hummingbot.connector.exchange.backpack.backpack_api_order_book_data_source import BackpackAPIOrderBookDataSource
 from hummingbot.connector.exchange.backpack.backpack_auth import BackpackAuth
 from hummingbot.connector.exchange_py_base import ExchangePyBase
@@ -141,6 +145,44 @@ class BackpackExchange(ExchangePyBase):
     def supported_order_types(self):
         """Returns the list of supported order types."""
         return CONSTANTS.SUPPORTED_ORDER_TYPES
+
+    def _is_order_not_found_during_status_update_error(self, status_update_exception: Exception) -> bool:
+        """
+        Returns True if the exception indicates that the order was not found during status update.
+
+        Args:
+            status_update_exception: Exception raised during order status update
+
+        Returns:
+            True if the order was not found, False otherwise
+        """
+        error_description = str(status_update_exception)
+        # Check for typical 404 error patterns from Backpack
+        is_not_found = (
+            "404" in error_description or
+            "Order not found" in error_description or
+            "not found" in error_description.lower()
+        )
+        return is_not_found
+
+    def _is_order_not_found_during_cancelation_error(self, cancelation_exception: Exception) -> bool:
+        """
+        Returns True if the exception indicates that the order was not found during cancelation.
+
+        Args:
+            cancelation_exception: Exception raised during order cancelation
+
+        Returns:
+            True if the order was not found, False otherwise
+        """
+        error_description = str(cancelation_exception)
+        # Check for typical 404 error patterns from Backpack
+        is_not_found = (
+            "404" in error_description or
+            "Order not found" in error_description or
+            "not found" in error_description.lower()
+        )
+        return is_not_found
 
     def _is_request_exception_related_to_time_synchronizer(self, request_exception: Exception):
         """Check if the exception is related to time synchronization issues."""
@@ -306,6 +348,29 @@ class BackpackExchange(ExchangePyBase):
                 mapping[trading_pair] = exchange_symbol
 
         return mapping
+
+    def _initialize_trading_pair_symbols_from_exchange_info(self, exchange_info: List[Dict[str, Any]]):
+        """
+        Initialize trading pair symbol mapping from exchange info.
+        Required abstract method from ExchangePyBase.
+        """
+        mapping = bidict()
+
+        # Backpack returns market info with symbols like "SOL_USDC"
+        for market_info in exchange_info:
+            try:
+                if backpack_utils.is_exchange_information_valid(market_info):
+                    exchange_symbol = market_info["symbol"]
+                    base = market_info["baseSymbol"]
+                    quote = market_info["quoteSymbol"]
+                    trading_pair = f"{base}-{quote}"
+
+                    if self._trading_pairs is None or trading_pair in self._trading_pairs:
+                        mapping[exchange_symbol] = trading_pair
+            except Exception as e:
+                self.logger().error(f"Error parsing trading pair {market_info}: {e}")
+
+        self._set_trading_pair_symbol_map(mapping)
 
     def _get_order_book_tracker(self):
         """Create and return order book tracker."""
@@ -701,7 +766,7 @@ class BackpackExchange(ExchangePyBase):
                 try:
                     # Extract fill information
                     trade_id = str(fill.get("id", ""))
-                    fill_timestamp = fill.get("timestamp", self._time_synchronizer.time() * 1000) / 1000.0
+                    fill_timestamp = float(fill.get("timestamp", self._time_synchronizer.time() * 1000)) / 1000.0
                     fill_price = Decimal(str(fill.get("price", "0")))
                     fill_quantity = Decimal(str(fill.get("quantity", "0")))
 
@@ -894,12 +959,12 @@ class BackpackExchange(ExchangePyBase):
         }
         """
         try:
-            # Extract order information
-            exchange_order_id = str(event_data.get("i", ""))
-            symbol = event_data.get("s", "")
-            order_status = event_data.get("X", "")
-            event_type = event_data.get("e", "")
-            client_order_id_raw = event_data.get("c")
+            # Extract order information using real Backpack API format
+            exchange_order_id = str(event_data.get("i", ""))       # Exchange order ID
+            symbol = event_data.get("s", "")                       # Symbol
+            order_status = event_data.get("X", "")                 # Order status
+            event_type = event_data.get("e", "")                   # Event type
+            client_order_id_raw = event_data.get("c")              # Client order ID (32-bit integer)
 
             if not exchange_order_id or not symbol:
                 self.logger().debug(f"Missing order ID or symbol in event: {event_data}")
@@ -973,12 +1038,24 @@ class BackpackExchange(ExchangePyBase):
             fill_base_amount = last_fill_qty
             fill_quote_amount = fill_base_amount * fill_price
 
-            # Create fee (Backpack doesn't provide fee info in WebSocket, so use default)
-            fee = TradeFeeBase.new_spot_fee(
-                fee_schema=self.trade_fee_schema(),
-                trade_type=tracked_order.trade_type,
-                percent_token=tracked_order.quote_asset,  # Assume fee in quote asset
-            )
+            # Extract fee information from WebSocket event (available in real Backpack format)
+            fee_amount = Decimal(str(event_data.get("n", "0")))      # Fee amount
+            fee_asset = event_data.get("N", tracked_order.quote_asset)  # Fee symbol
+
+            if fee_amount > 0:
+                fee = TradeFeeBase.new_spot_fee(
+                    fee_schema=self.trade_fee_schema(),
+                    trade_type=tracked_order.trade_type,
+                    percent_token=fee_asset,
+                    flat_fees=[TokenAmount(amount=fee_amount, token=fee_asset)]
+                )
+            else:
+                # Fallback to default fee calculation if no fee info provided
+                fee = TradeFeeBase.new_spot_fee(
+                    fee_schema=self.trade_fee_schema(),
+                    trade_type=tracked_order.trade_type,
+                    percent_token=tracked_order.quote_asset,
+                )
 
             # Create trade update
             trade_update = TradeUpdate(
