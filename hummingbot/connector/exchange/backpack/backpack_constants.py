@@ -55,7 +55,10 @@ WITHDRAWALS_PATH_URL = "/capital/withdrawals"
 
 # History Endpoints
 HISTORY_ORDERS_PATH_URL = "/history/orders"
-HISTORY_FILLS_PATH_URL = "/history/fills"
+HISTORY_FILLS_PATH_URL = "/history/fills"  # This gets prefixed with /wapi/v1
+# Additional endpoints needed for tests
+BALANCES_PATH_URL = "/capital"  # Balance endpoint from API spec: /api/v1/capital
+FILLS_PATH_URL = "/history/fills"  # This gets prefixed with /wapi/v1
 HISTORY_FUNDING_PATH_URL = "/history/funding"
 HISTORY_PNL_PATH_URL = "/history/pnl"
 HISTORY_DUST_PATH_URL = "/history/dust"

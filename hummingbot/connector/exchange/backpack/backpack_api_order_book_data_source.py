@@ -89,7 +89,8 @@ class BackpackAPIOrderBookDataSource(OrderBookTrackerDataSource):
                 # Subscribe to trades
                 trade_payload = {
                     "method": "SUBSCRIBE",
-                    "params": [f"{symbol.lower()}.trades"]
+                    "params": [f"{symbol.lower()}.trades"],
+                    "id": 1
                 }
                 trade_request = WSJSONRequest(payload=trade_payload)
                 await ws.send(trade_request)
@@ -97,7 +98,8 @@ class BackpackAPIOrderBookDataSource(OrderBookTrackerDataSource):
                 # Subscribe to order book depth updates
                 depth_payload = {
                     "method": "SUBSCRIBE",
-                    "params": [f"{symbol.lower()}.depth"]
+                    "params": [f"{symbol.lower()}.depth"],
+                    "id": 2
                 }
                 depth_request = WSJSONRequest(payload=depth_payload)
                 await ws.send(depth_request)
@@ -155,13 +157,17 @@ class BackpackAPIOrderBookDataSource(OrderBookTrackerDataSource):
             message_queue: Queue to put the parsed message
         """
         try:
+            # Backpack uses {"stream": "...", "data": {...}} wrapper structure
             if "stream" in raw_message and "data" in raw_message:
                 stream = raw_message["stream"]
-                if ".trades" in stream:
-                    symbol = stream.split(".trades")[0].upper()
+                data = raw_message["data"]
+
+                # Check if this is a trade event
+                if stream.startswith("trade.") and data.get("e") == "trade":
+                    symbol = data["s"]
                     trading_pair = await self._connector.trading_pair_associated_to_exchange_symbol(symbol=symbol)
                     trade_message = BackpackOrderBook.trade_message_from_exchange(
-                        raw_message["data"],
+                        data,
                         {"trading_pair": trading_pair}
                     )
                     message_queue.put_nowait(trade_message)
@@ -177,13 +183,17 @@ class BackpackAPIOrderBookDataSource(OrderBookTrackerDataSource):
             message_queue: Queue to put the parsed message
         """
         try:
+            # Backpack uses {"stream": "...", "data": {...}} wrapper structure
             if "stream" in raw_message and "data" in raw_message:
                 stream = raw_message["stream"]
-                if ".depth" in stream:
-                    symbol = stream.split(".depth")[0].upper()
+                data = raw_message["data"]
+
+                # Check if this is a depth update event
+                if stream.startswith("depth.") and data.get("e") == "depth":
+                    symbol = data["s"]
                     trading_pair = await self._connector.trading_pair_associated_to_exchange_symbol(symbol=symbol)
                     order_book_message: OrderBookMessage = BackpackOrderBook.diff_message_from_exchange(
-                        raw_message["data"],
+                        data,
                         time.time(),
                         {"trading_pair": trading_pair}
                     )
@@ -202,10 +212,12 @@ class BackpackAPIOrderBookDataSource(OrderBookTrackerDataSource):
             The channel identifier for routing the message
         """
         channel = ""
+
+        # Backpack uses {"stream": "...", "data": {...}} wrapper structure
         if "stream" in event_message:
             stream = event_message["stream"]
-            if ".trades" in stream:
+            if stream.startswith("trade."):
                 channel = self._trade_messages_queue_key
-            elif ".depth" in stream:
+            elif stream.startswith("depth."):
                 channel = self._diff_messages_queue_key
         return channel

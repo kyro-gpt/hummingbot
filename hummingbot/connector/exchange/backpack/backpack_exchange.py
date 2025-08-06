@@ -307,18 +307,6 @@ class BackpackExchange(ExchangePyBase):
 
         return mapping
 
-    async def exchange_symbol_associated_to_pair(self, trading_pair: str) -> str:
-        """Convert trading pair to exchange symbol."""
-        if self._trading_pair_symbol_map is None:
-            await self._get_trading_pair_from_exchange_symbol_map()
-        return self._trading_pair_symbol_map[trading_pair]
-
-    async def trading_pair_associated_to_exchange_symbol(self, symbol: str) -> str:
-        """Convert exchange symbol to trading pair."""
-        if self._trading_pair_symbol_map is None:
-            await self._get_trading_pair_from_exchange_symbol_map()
-        return self._trading_pair_symbol_map.inverse[symbol]
-
     def _get_order_book_tracker(self):
         """Create and return order book tracker."""
         if self._order_book_tracker is None:
@@ -452,37 +440,42 @@ class BackpackExchange(ExchangePyBase):
             return is_cancelled
 
         except Exception as e:
-            self.logger().error(f"Failed to cancel order {order_id}: {e}")
-            return False
+            # Handle 404 errors specifically (order not found)
+            if "404" in str(e) or "Not Found" in str(e) or "RESOURCE_NOT_FOUND" in str(e):
+                self.logger().info(f"Order {order_id} not found during cancellation (404) - may already be cancelled")
+                return False
+            else:
+                self.logger().error(f"Failed to cancel order {order_id}: {e}")
+                return False
 
     async def _format_trading_rules(self, exchange_info_dict: Dict[str, Any]) -> List[TradingRule]:
         """
         Format trading rules from Backpack's market info.
 
-        Expected exchange_info_dict format from /markets endpoint:
+        Actual exchange_info_dict format from Backpack /api/v1/markets endpoint:
         [
             {
                 "symbol": "SOL_USDC",
                 "baseSymbol": "SOL",
                 "quoteSymbol": "USDC",
                 "marketType": "SPOT",
+                "orderBookState": "Open",
                 "filters": {
                     "price": {
                         "minPrice": "0.01",
-                        "maxPrice": None,
-                        "tickSize": "0.01",
-                        "maxMultiplier": "1.25",
-                        "minMultiplier": "0.75",
-                        ...
+                        "maxPrice": null,
+                        "tickSize": "0.01"
                     },
                     "quantity": {
                         "minQuantity": "0.01",
-                        "maxQuantity": None,
+                        "maxQuantity": null,
                         "stepSize": "0.01"
                     }
                 }
             }
         ]
+
+        Note: Backpack doesn't provide minNotional filter, so we use a sensible default.
         """
         try:
             trading_rules = []
@@ -512,32 +505,42 @@ class BackpackExchange(ExchangePyBase):
                     # Create trading pair in Hummingbot format: BASE-QUOTE
                     trading_pair = f"{base_symbol.upper()}-{quote_symbol.upper()}"
 
-                    # Extract filter information
+                    # Extract filter information from Backpack's nested dict format
+                    # {"price": {"tickSize": "0.01", "minPrice": "0.01"}, "quantity": {"minQuantity": "0.01", "stepSize": "0.01"}}
                     filters = market_info.get("filters", {})
 
-                    # Price filter
                     price_filter = filters.get("price", {})
-                    min_price_increment = Decimal(str(price_filter.get("tickSize", "0.01")))
-
-                    # Quantity filter
                     quantity_filter = filters.get("quantity", {})
+                    # Backpack doesn't provide minNotional filter, so this will be empty
+                    min_notional_filter = filters.get("minNotional", {})
+
+                    # Extract values from Backpack's actual API response
+                    min_price_increment = Decimal(str(price_filter.get("tickSize", "0.01")))
                     min_order_size = Decimal(str(quantity_filter.get("minQuantity", "0.001")))
+
+                    # Handle maxQuantity - Backpack often returns null, so provide a reasonable default
+                    max_quantity_value = quantity_filter.get("maxQuantity")
+                    if max_quantity_value is not None:
+                        max_order_size = Decimal(str(max_quantity_value))
+                    else:
+                        # Use a very large default when maxQuantity is null
+                        max_order_size = Decimal("1000000")
+
                     min_base_amount_increment = Decimal(str(quantity_filter.get("stepSize", "0.001")))
 
-                    # Calculate min notional size - use a reasonable default if not specified
-                    # Backpack doesn't seem to have a separate notional filter, so we'll calculate a default
-                    min_price = price_filter.get("minPrice")
-                    if min_price and min_price != "0":
-                        # Use min_order_size * min_price as min_notional
-                        min_notional_size = min_order_size * Decimal(str(min_price))
+                    # Handle min notional size
+                    min_notional_value = min_notional_filter.get("minNotional") or min_notional_filter.get("minNotionalSize")
+                    if min_notional_value:
+                        min_notional_size = Decimal(str(min_notional_value))
                     else:
-                        # Default minimum notional of $1 USD equivalent
+                        # Only use default if no notional filter is provided by the API
                         min_notional_size = Decimal("1.0")
 
                     # Create trading rule
                     trading_rule = TradingRule(
                         trading_pair=trading_pair,
                         min_order_size=min_order_size,
+                        max_order_size=max_order_size,
                         min_price_increment=min_price_increment,
                         min_base_amount_increment=min_base_amount_increment,
                         min_notional_size=min_notional_size
