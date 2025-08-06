@@ -138,16 +138,8 @@ class BackpackAPIUserStreamDataSource(UserStreamTrackerDataSource):
             self.logger().info(f"Subscribed to Backpack private channels: {streams}")
             self.logger().info(f"Subscription payload: {subscription_payload}")
 
-            # Wait for subscription confirmation and log any immediate responses
-            print("   🔍 Waiting for subscription responses...")
-            try:
-                for i in range(3):  # Check for 3 seconds
-                    message = await asyncio.wait_for(websocket_assistant.receive(), timeout=1.0)
-                    if message:
-                        print(f"      📩 Subscription response {i+1}: {message}")
-                    await asyncio.sleep(1)
-            except asyncio.TimeoutError:
-                print("      ⏱️ No immediate subscription responses")
+            # Subscription sent successfully
+            self.logger().debug("Subscription request sent to Backpack WebSocket")
 
         except asyncio.CancelledError:
             raise
@@ -177,7 +169,7 @@ class BackpackAPIUserStreamDataSource(UserStreamTrackerDataSource):
                 raise
             except Exception as e:
                 self.logger().error(f"Error processing WebSocket messages: {e}")
-                await self._sleep(5.0)
+                raise  # Re-raise to let base class handle the retry logic
 
     async def _process_event_message(self, event_message: Dict[str, Any], queue: asyncio.Queue):
         """
@@ -212,15 +204,15 @@ class BackpackAPIUserStreamDataSource(UserStreamTrackerDataSource):
             if not stream or not data:
                 return
 
-            # Route messages based on stream type
+            # Route messages based on stream type (only streams that actually exist in Backpack)
             if "account.orderUpdate" in stream:
                 self.logger().debug(f"Received order update: {data}")
                 queue.put_nowait(event_message)
-            elif "account.fills" in stream:
-                self.logger().debug(f"Received fill update: {data}")
+            elif "account.positionUpdate" in stream:
+                self.logger().debug(f"Received position update: {data}")
                 queue.put_nowait(event_message)
-            elif "account.balances" in stream:
-                self.logger().debug(f"Received balance update: {data}")
+            elif "account.rfqUpdate" in stream:
+                self.logger().debug(f"Received RFQ update: {data}")
                 queue.put_nowait(event_message)
             else:
                 self.logger().debug(f"Received unknown stream message: {stream}")
