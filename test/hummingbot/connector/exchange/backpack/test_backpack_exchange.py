@@ -194,16 +194,33 @@ class BackpackExchangeTests(AbstractExchangeConnectorTests.ExchangeConnectorTest
     @property
     def order_creation_request_successful_mock_response(self):
         return {
-            "symbol": self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset),
-            "orderId": str(self.expected_exchange_order_id),
-            "clientOrderId": "test_client_order_id",
-            "side": "Bid",
             "orderType": "Limit",
+            "id": str(self.expected_exchange_order_id),
+            "clientId": 12345,
+            "createdAt": 1640995200000,
+            "executedQuantity": "0",
+            "executedQuoteQuantity": "0",
             "quantity": "100",
-            "price": "10000",
+            "quoteQuantity": "1000000",  # 100 * 10000
+            "reduceOnly": False,
             "timeInForce": "GTC",
-            "status": "New",
-            "timestamp": "1640995200000"
+            "selfTradePrevention": "RejectTaker",
+            "side": "Bid",
+            "status": "New",  # Changed from "Cancelled" to "New" for new order
+            "symbol": self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset),
+            # Optional fields for stop/take profit orders
+            "stopLossTriggerPrice": None,
+            "stopLossLimitPrice": None,
+            "stopLossTriggerBy": None,
+            "takeProfitTriggerPrice": None,
+            "takeProfitLimitPrice": None,
+            "takeProfitTriggerBy": None,
+            "triggerBy": None,
+            "triggerPrice": None,
+            "triggerQuantity": None,
+            "triggeredAt": None,
+            "relatedOrderId": None,
+            "strategyId": None
         }
 
     @property
@@ -337,24 +354,31 @@ class BackpackExchangeTests(AbstractExchangeConnectorTests.ExchangeConnectorTest
         self.assertIn("X-Window", request_headers)
 
     def validate_order_creation_request(self, order: InFlightOrder, request_call: RequestCall):
-        request_data = dict(request_call.kwargs["data"])
+        import json
+        import hashlib
+        request_data = json.loads(request_call.kwargs["data"])
         self.assertEqual(self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset), request_data["symbol"])
         self.assertEqual("Bid" if order.trade_type == TradeType.BUY else "Ask", request_data["side"])
         self.assertEqual("Limit" if order.order_type == OrderType.LIMIT else "Market", request_data["orderType"])
-        self.assertEqual(str(order.amount), request_data["quantity"])
+        # Convert to Decimal for consistent comparison (handles 100 vs 100.000000)
+        from decimal import Decimal
+        self.assertEqual(Decimal(str(order.amount)), Decimal(request_data["quantity"]))
         if order.order_type == OrderType.LIMIT:
-            self.assertEqual(str(order.price), request_data["price"])
-        self.assertEqual(order.client_order_id, request_data["clientId"])
+            self.assertEqual(Decimal(str(order.price)), Decimal(request_data["price"]))
+        # Backpack uses integer clientId generated from hash of order.client_order_id
+        expected_client_id = int(hashlib.md5(order.client_order_id.encode()).hexdigest()[:8], 16) % (2**32 - 1)
+        self.assertEqual(expected_client_id, request_data["clientId"])
 
     def validate_order_cancelation_request(self, order: InFlightOrder, request_call: RequestCall):
-        request_data = dict(request_call.kwargs["data"])
+        import json
+        request_data = json.loads(request_call.kwargs["data"])
         self.assertEqual(self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset), request_data["symbol"])
-        self.assertEqual(order.client_order_id, request_data["clientId"])
+        self.assertEqual(order.exchange_order_id, request_data["orderId"])  # Backpack uses orderId, not clientId
 
     def validate_order_status_request(self, order: InFlightOrder, request_call: RequestCall):
         request_params = request_call.kwargs["params"]
         self.assertEqual(self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset), request_params["symbol"])
-        self.assertEqual(order.client_order_id, request_params["clientId"])
+        self.assertEqual(order.exchange_order_id, request_params["orderId"])  # Backpack uses orderId, not clientId
 
     def validate_trades_request(self, order: InFlightOrder, request_call: RequestCall):
         request_params = request_call.kwargs["params"]
@@ -507,16 +531,24 @@ class BackpackExchangeTests(AbstractExchangeConnectorTests.ExchangeConnectorTest
         return {
             "stream": "account.orderUpdate",
             "data": {
-                "clientId": order.client_order_id,
-                "orderId": order.exchange_order_id,
-                "symbol": self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset),
-                "side": "Bid" if order.trade_type == TradeType.BUY else "Ask",
-                "orderType": "Limit" if order.order_type == OrderType.LIMIT else "Market",
-                "quantity": str(order.amount),
-                "price": str(order.price),
-                "timeInForce": "GTC",
-                "status": "New",
-                "timestamp": "1640995200000"
+                "E": 1754462606817679,           # Event time in microseconds (real format)
+                "O": "USER",                     # Origin of the update
+                "S": "Bid" if order.trade_type == TradeType.BUY else "Ask",  # Side
+                "T": 1754462606815843,           # Engine timestamp in microseconds
+                "V": "RejectTaker",              # Self trade prevention
+                "X": "New",                      # Order state (real format)
+                "Z": "0",                        # Cumulative filled quantity
+                "c": int(hashlib.md5(order.client_order_id.encode()).hexdigest()[:8], 16) % (2**32 - 1),  # Client order ID (32-bit integer)
+                "e": "orderAccepted",            # Event type (real format)
+                "f": "GTC",                      # Time in force
+                "i": str(order.exchange_order_id),  # Exchange order ID (real format)
+                "o": "LIMIT" if order.order_type == OrderType.LIMIT else "MARKET",  # Order type
+                "p": str(order.price),           # Price
+                "q": str(order.amount),          # Quantity
+                "r": False,                      # Reduce only flag
+                "s": self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset),  # Symbol (real format)
+                "t": None,                       # Trade ID (null for new orders)
+                "z": "0"                         # Last filled quantity
             }
         }
 
@@ -524,16 +556,24 @@ class BackpackExchangeTests(AbstractExchangeConnectorTests.ExchangeConnectorTest
         return {
             "stream": "account.orderUpdate",
             "data": {
-                "clientId": order.client_order_id,
-                "orderId": order.exchange_order_id,
-                "symbol": self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset),
-                "side": "Bid" if order.trade_type == TradeType.BUY else "Ask",
-                "orderType": "Limit" if order.order_type == OrderType.LIMIT else "Market",
-                "quantity": str(order.amount),
-                "price": str(order.price),
-                "timeInForce": "GTC",
-                "status": "Cancelled",
-                "timestamp": "1640995200000"
+                "E": 1754462606817679,           # Event time in microseconds (real format)
+                "O": "USER",                     # Origin of the update
+                "S": "Bid" if order.trade_type == TradeType.BUY else "Ask",  # Side
+                "T": 1754462606815843,           # Engine timestamp in microseconds
+                "V": "RejectTaker",              # Self trade prevention
+                "X": "Cancelled",                # Order state (real format)
+                "Z": "0",                        # Cumulative filled quantity
+                "c": int(hashlib.md5(order.client_order_id.encode()).hexdigest()[:8], 16) % (2**32 - 1),  # Client order ID (32-bit integer)
+                "e": "orderCancelled",           # Event type (real format)
+                "f": "GTC",                      # Time in force
+                "i": str(order.exchange_order_id),  # Exchange order ID (real format)
+                "o": "LIMIT" if order.order_type == OrderType.LIMIT else "MARKET",  # Order type
+                "p": str(order.price),           # Price
+                "q": str(order.amount),          # Quantity
+                "r": False,                      # Reduce only flag
+                "s": self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset),  # Symbol (real format)
+                "t": None,                       # Trade ID (null for cancelled orders)
+                "z": "0"                         # Last filled quantity
             }
         }
 
@@ -579,58 +619,126 @@ class BackpackExchangeTests(AbstractExchangeConnectorTests.ExchangeConnectorTest
 
     def _order_status_request_completely_filled_mock_response(self, order: InFlightOrder) -> Any:
         return {
-            "symbol": self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset),
-            "orderId": order.exchange_order_id,
-            "clientOrderId": order.client_order_id,
-            "side": "Bid" if order.trade_type == TradeType.BUY else "Ask",
             "orderType": "Limit" if order.order_type == OrderType.LIMIT else "Market",
+            "id": order.exchange_order_id,
+            "clientId": 12345,
+            "createdAt": 1640995200000,
+            "executedQuantity": str(order.amount),  # Fully filled
+            "executedQuoteQuantity": str(order.amount * order.price),
             "quantity": str(order.amount),
-            "price": str(order.price),
-            "status": "Filled",
-            "fillPrice": str(order.price),
-            "fillQuantity": str(order.amount),
-            "timestamp": "1640995200000"
+            "quoteQuantity": str(order.amount * order.price),
+            "reduceOnly": False,
+            "timeInForce": "GTC",
+            "selfTradePrevention": "RejectTaker",
+            "side": "Bid" if order.trade_type == TradeType.BUY else "Ask",
+            "status": "Filled",  # This is the key field for determining state
+            "symbol": self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset),
+            # Optional fields
+            "stopLossTriggerPrice": None,
+            "stopLossLimitPrice": None,
+            "stopLossTriggerBy": None,
+            "takeProfitTriggerPrice": None,
+            "takeProfitLimitPrice": None,
+            "takeProfitTriggerBy": None,
+            "triggerBy": None,
+            "triggerPrice": None,
+            "triggerQuantity": None,
+            "triggeredAt": None,
+            "relatedOrderId": None,
+            "strategyId": None
         }
 
     def _order_status_request_canceled_mock_response(self, order: InFlightOrder) -> Any:
         return {
-            "symbol": self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset),
-            "orderId": order.exchange_order_id,
-            "clientOrderId": order.client_order_id,
-            "side": "Bid" if order.trade_type == TradeType.BUY else "Ask",
             "orderType": "Limit" if order.order_type == OrderType.LIMIT else "Market",
+            "id": order.exchange_order_id,  # Backpack uses "id", not "orderId" in response
+            "clientId": 12345,  # Backpack uses integer clientId
+            "createdAt": 1640995200000,  # Backpack uses "createdAt", not "timestamp"
+            "executedQuantity": str(order.amount),  # Assuming fully cancelled
+            "executedQuoteQuantity": str(order.amount * order.price),
             "quantity": str(order.amount),
-            "price": str(order.price),
-            "status": "Cancelled",
-            "timestamp": "1640995200000"
+            "quoteQuantity": str(order.amount * order.price),
+            "reduceOnly": False,
+            "timeInForce": "GTC",
+            "selfTradePrevention": "RejectTaker",
+            "side": "Bid" if order.trade_type == TradeType.BUY else "Ask",
+            "status": "Cancelled",  # This is the key field for determining state
+            "symbol": self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset),
+            # Optional fields
+            "stopLossTriggerPrice": None,
+            "stopLossLimitPrice": None,
+            "stopLossTriggerBy": None,
+            "takeProfitTriggerPrice": None,
+            "takeProfitLimitPrice": None,
+            "takeProfitTriggerBy": None,
+            "triggerBy": None,
+            "triggerPrice": None,
+            "triggerQuantity": None,
+            "triggeredAt": None,
+            "relatedOrderId": None,
+            "strategyId": None
         }
 
     def _order_status_request_open_mock_response(self, order: InFlightOrder) -> Any:
         return {
-            "symbol": self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset),
-            "orderId": order.exchange_order_id,
-            "clientOrderId": order.client_order_id,
-            "side": "Bid" if order.trade_type == TradeType.BUY else "Ask",
             "orderType": "Limit" if order.order_type == OrderType.LIMIT else "Market",
+            "id": order.exchange_order_id,
+            "clientId": 12345,
+            "createdAt": 1640995200000,
+            "executedQuantity": "0",  # Not filled yet
+            "executedQuoteQuantity": "0",
             "quantity": str(order.amount),
-            "price": str(order.price),
-            "status": "New",
-            "timestamp": "1640995200000"
+            "quoteQuantity": str(order.amount * order.price),
+            "reduceOnly": False,
+            "timeInForce": "GTC",
+            "selfTradePrevention": "RejectTaker",
+            "side": "Bid" if order.trade_type == TradeType.BUY else "Ask",
+            "status": "New",  # This is the key field for determining state
+            "symbol": self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset),
+            # Optional fields
+            "stopLossTriggerPrice": None,
+            "stopLossLimitPrice": None,
+            "stopLossTriggerBy": None,
+            "takeProfitTriggerPrice": None,
+            "takeProfitLimitPrice": None,
+            "takeProfitTriggerBy": None,
+            "triggerBy": None,
+            "triggerPrice": None,
+            "triggerQuantity": None,
+            "triggeredAt": None,
+            "relatedOrderId": None,
+            "strategyId": None
         }
 
     def _order_status_request_partially_filled_mock_response(self, order: InFlightOrder) -> Any:
         return {
-            "symbol": self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset),
-            "orderId": order.exchange_order_id,
-            "clientOrderId": order.client_order_id,
-            "side": "Bid" if order.trade_type == TradeType.BUY else "Ask",
             "orderType": "Limit" if order.order_type == OrderType.LIMIT else "Market",
+            "id": order.exchange_order_id,
+            "clientId": 12345,
+            "createdAt": 1640995200000,
+            "executedQuantity": str(self.expected_partial_fill_amount),  # Partially filled
+            "executedQuoteQuantity": str(self.expected_partial_fill_amount * self.expected_partial_fill_price),
             "quantity": str(order.amount),
-            "price": str(order.price),
-            "status": "PartiallyFilled",
-            "fillPrice": str(self.expected_partial_fill_price),
-            "fillQuantity": str(self.expected_partial_fill_amount),
-            "timestamp": "1640995200000"
+            "quoteQuantity": str(order.amount * order.price),
+            "reduceOnly": False,
+            "timeInForce": "GTC",
+            "selfTradePrevention": "RejectTaker",
+            "side": "Bid" if order.trade_type == TradeType.BUY else "Ask",
+            "status": "PartiallyFilled",  # This is the key field for determining state
+            "symbol": self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset),
+            # Optional fields
+            "stopLossTriggerPrice": None,
+            "stopLossLimitPrice": None,
+            "stopLossTriggerBy": None,
+            "takeProfitTriggerPrice": None,
+            "takeProfitLimitPrice": None,
+            "takeProfitTriggerBy": None,
+            "triggerBy": None,
+            "triggerPrice": None,
+            "triggerQuantity": None,
+            "triggeredAt": None,
+            "relatedOrderId": None,
+            "strategyId": None
         }
 
     def _order_fills_request_partial_fill_mock_response(self, order: InFlightOrder):

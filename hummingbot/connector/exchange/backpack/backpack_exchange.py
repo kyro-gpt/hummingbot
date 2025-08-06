@@ -195,13 +195,17 @@ class BackpackExchange(ExchangePyBase):
 
     def _is_order_not_found_during_status_update_error(self, status_update_exception: Exception) -> bool:
         """Check if the exception indicates an order was not found during status update."""
-        error_description = str(status_update_exception).lower()
-        return "order not found" in error_description or "unknown order" in error_description
+        error_description = str(status_update_exception)
+        # Check for typical error patterns from Backpack that indicate order not found
+        is_not_found = (
+            "404" in error_description or  # Not Found
+            "401" in error_description or  # Unauthorized (may indicate order doesn't exist)
+            "Order not found" in error_description or
+            "not found" in error_description.lower()
+        )
+        return is_not_found
 
-    def _is_order_not_found_during_cancelation_error(self, cancelation_exception: Exception) -> bool:
-        """Check if the exception indicates an order was not found during cancellation."""
-        error_description = str(cancelation_exception).lower()
-        return "order not found" in error_description or "unknown order" in error_description
+
 
     def _create_web_assistants_factory(self) -> WebAssistantsFactory:
         """Creates the web assistants factory for API calls."""
@@ -481,7 +485,7 @@ class BackpackExchange(ExchangePyBase):
             # Convert trading pair to exchange format
             symbol = await self.exchange_symbol_associated_to_pair(trading_pair=tracked_order.trading_pair)
 
-            # Cancel using exchange order ID (stored in tracked_order.exchange_order_id)
+            # Cancel using exchange order ID (per API spec: either orderId OR clientId, not both)
             cancel_data = {
                 "symbol": symbol,
                 "orderId": tracked_order.exchange_order_id
@@ -505,13 +509,9 @@ class BackpackExchange(ExchangePyBase):
             return is_cancelled
 
         except Exception as e:
-            # Handle 404 errors specifically (order not found)
-            if "404" in str(e) or "Not Found" in str(e) or "RESOURCE_NOT_FOUND" in str(e):
-                self.logger().info(f"Order {order_id} not found during cancellation (404) - may already be cancelled")
-                return False
-            else:
-                self.logger().error(f"Failed to cancel order {order_id}: {e}")
-                return False
+            # Log the error and re-raise for base class handling
+            self.logger().error(f"Failed to cancel order {order_id}: {e}")
+            raise
 
     async def _format_trading_rules(self, exchange_info_dict: Dict[str, Any]) -> List[TradingRule]:
         """
@@ -869,26 +869,9 @@ class BackpackExchange(ExchangePyBase):
             return order_update
 
         except Exception as e:
-            # Handle 404 error - order not found (likely cancelled)
-            if "404" in str(e) and "RESOURCE_NOT_FOUND" in str(e):
-                self.logger().info(f"Order {tracked_order.client_order_id} not found - likely cancelled")
-                return OrderUpdate(
-                    trading_pair=tracked_order.trading_pair,
-                    update_timestamp=self._time_synchronizer.time(),
-                    new_state=CONSTANTS.ORDER_STATE.get("Cancelled", tracked_order.current_state),
-                    client_order_id=tracked_order.client_order_id,
-                    exchange_order_id=tracked_order.exchange_order_id,
-                )
-            else:
-                self.logger().error(f"Failed to request order status for {tracked_order.client_order_id}: {e}")
-                # Return current state if request fails
-                return OrderUpdate(
-                    trading_pair=tracked_order.trading_pair,
-                    update_timestamp=self._time_synchronizer.time(),
-                    new_state=tracked_order.current_state,
-                    client_order_id=tracked_order.client_order_id,
-                    exchange_order_id=tracked_order.exchange_order_id,
-                )
+            # Log the error and re-raise for base class handling
+            self.logger().error(f"Failed to request order status for {tracked_order.client_order_id}: {e}")
+            raise
 
     async def _user_stream_event_listener(self):
         """
