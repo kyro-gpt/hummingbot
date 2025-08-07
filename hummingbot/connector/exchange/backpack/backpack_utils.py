@@ -47,7 +47,7 @@ class BackpackConfigMap(BaseConnectorConfigMap):
     backpack_api_key: SecretStr = Field(
         default=...,
         json_schema_extra={
-            "prompt": lambda cm: "Enter your Backpack API key (public key)",
+            "prompt": "Enter your Backpack API key (public key)",
             "is_secure": True,
             "is_connect_key": True,
             "prompt_on_new": True,
@@ -56,7 +56,7 @@ class BackpackConfigMap(BaseConnectorConfigMap):
     backpack_secret_key: SecretStr = Field(
         default=...,
         json_schema_extra={
-            "prompt": lambda cm: "Enter your Backpack secret key (private key)",
+            "prompt": "Enter your Backpack secret key (private key)",
             "is_secure": True,
             "is_connect_key": True,
             "prompt_on_new": True,

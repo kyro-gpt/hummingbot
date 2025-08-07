@@ -89,18 +89,20 @@ class BackpackAPIOrderBookDataSource(OrderBookTrackerDataSource):
                 # Subscribe to trades
                 trade_payload = {
                     "method": "SUBSCRIBE",
-                    "params": [f"{symbol.lower()}.trades"],
+                    "params": [f"trade.{symbol}"],  # Correct format: trade.SYMBOL
                     "id": 1
                 }
+
                 trade_request = WSJSONRequest(payload=trade_payload)
                 await ws.send(trade_request)
 
                 # Subscribe to order book depth updates
                 depth_payload = {
                     "method": "SUBSCRIBE",
-                    "params": [f"{symbol.lower()}.depth"],
+                    "params": [f"depth.{symbol}"],  # Correct format: depth.SYMBOL
                     "id": 2
                 }
+
                 depth_request = WSJSONRequest(payload=depth_payload)
                 await ws.send(depth_request)
 
@@ -157,6 +159,7 @@ class BackpackAPIOrderBookDataSource(OrderBookTrackerDataSource):
             message_queue: Queue to put the parsed message
         """
         try:
+
             # Backpack uses {"stream": "...", "data": {...}} wrapper structure
             if "stream" in raw_message and "data" in raw_message:
                 stream = raw_message["stream"]
@@ -166,6 +169,7 @@ class BackpackAPIOrderBookDataSource(OrderBookTrackerDataSource):
                 if stream.startswith("trade.") and data.get("e") == "trade":
                     symbol = data["s"]
                     trading_pair = await self._connector.trading_pair_associated_to_exchange_symbol(symbol=symbol)
+
                     trade_message = BackpackOrderBook.trade_message_from_exchange(
                         data,
                         {"trading_pair": trading_pair}
@@ -183,6 +187,7 @@ class BackpackAPIOrderBookDataSource(OrderBookTrackerDataSource):
             message_queue: Queue to put the parsed message
         """
         try:
+
             # Backpack uses {"stream": "...", "data": {...}} wrapper structure
             if "stream" in raw_message and "data" in raw_message:
                 stream = raw_message["stream"]
@@ -192,6 +197,7 @@ class BackpackAPIOrderBookDataSource(OrderBookTrackerDataSource):
                 if stream.startswith("depth.") and data.get("e") == "depth":
                     symbol = data["s"]
                     trading_pair = await self._connector.trading_pair_associated_to_exchange_symbol(symbol=symbol)
+
                     order_book_message: OrderBookMessage = BackpackOrderBook.diff_message_from_exchange(
                         data,
                         time.time(),
@@ -211,6 +217,7 @@ class BackpackAPIOrderBookDataSource(OrderBookTrackerDataSource):
         Returns:
             The channel identifier for routing the message
         """
+
         channel = ""
 
         # Backpack uses {"stream": "...", "data": {...}} wrapper structure
@@ -220,4 +227,9 @@ class BackpackAPIOrderBookDataSource(OrderBookTrackerDataSource):
                 channel = self._trade_messages_queue_key
             elif stream.startswith("depth."):
                 channel = self._diff_messages_queue_key
+            else:
+                pass  # No other stream types are handled here
+        else:
+            pass  # No other message types are handled here
+
         return channel

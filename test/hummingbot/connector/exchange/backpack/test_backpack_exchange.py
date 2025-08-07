@@ -4,8 +4,8 @@ import hashlib
 import json
 import re
 from decimal import Decimal
-from typing import Any, Callable, Dict, List, Optional, Tuple
-from unittest.mock import AsyncMock, patch
+from typing import Any, Callable, List, Optional, Tuple
+from unittest.mock import AsyncMock
 
 from aioresponses import aioresponses
 from aioresponses.core import RequestCall
@@ -20,11 +20,10 @@ from hummingbot.connector.exchange.backpack import backpack_constants as CONSTAN
 from hummingbot.connector.exchange.backpack.backpack_exchange import BackpackExchange
 from hummingbot.connector.test_support.exchange_connector_test import AbstractExchangeConnectorTests
 from hummingbot.connector.trading_rule import TradingRule
-from hummingbot.connector.utils import get_new_client_order_id
 from hummingbot.core.data_type.common import OrderType, TradeType
-from hummingbot.core.data_type.in_flight_order import InFlightOrder, OrderState
+from hummingbot.core.data_type.in_flight_order import InFlightOrder
 from hummingbot.core.data_type.trade_fee import DeductedFromReturnsTradeFee, TokenAmount, TradeFeeBase
-from hummingbot.core.event.events import MarketOrderFailureEvent, OrderFilledEvent
+from hummingbot.core.event.events import OrderFilledEvent
 
 
 class BackpackExchangeTests(AbstractExchangeConnectorTests.ExchangeConnectorTests):
@@ -354,8 +353,8 @@ class BackpackExchangeTests(AbstractExchangeConnectorTests.ExchangeConnectorTest
         self.assertIn("X-Window", request_headers)
 
     def validate_order_creation_request(self, order: InFlightOrder, request_call: RequestCall):
-        import json
         import hashlib
+        import json
         request_data = json.loads(request_call.kwargs["data"])
         self.assertEqual(self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset), request_data["symbol"])
         self.assertEqual("Bid" if order.trade_type == TradeType.BUY else "Ask", request_data["side"])
@@ -870,10 +869,8 @@ class BackpackExchangeTests(AbstractExchangeConnectorTests.ExchangeConnectorTest
     @aioresponses()
     def test_lost_order_user_stream_full_fill_events_are_processed(self, mock_api):
         """Override parent test with debug prints to identify hanging point"""
-        print("DEBUG: User stream test starting...")
         self.exchange._set_current_timestamp(1640780000)
 
-        print("DEBUG: Starting order tracking...")
         self.exchange.start_tracking_order(
             order_id=self.client_order_id_prefix + "1",
             exchange_order_id=str(self.expected_exchange_order_id),
@@ -884,65 +881,41 @@ class BackpackExchangeTests(AbstractExchangeConnectorTests.ExchangeConnectorTest
             amount=Decimal("1"),
         )
         order = self.exchange.in_flight_orders[self.client_order_id_prefix + "1"]
-        print(f"DEBUG: Order tracked: {order.client_order_id}")
 
-        print("DEBUG: Processing order not found events...")
         for i in range(self.exchange._order_tracker._lost_order_count_limit + 1):
-            print(f"DEBUG: Processing not found {i+1}/{self.exchange._order_tracker._lost_order_count_limit + 1}")
             self.async_run_with_timeout(
                 self.exchange._order_tracker.process_order_not_found(client_order_id=order.client_order_id))
 
-        print("DEBUG: Checking order removal from in_flight_orders...")
         self.assertNotIn(order.client_order_id, self.exchange.in_flight_orders)
-        print("DEBUG: Order successfully removed from tracking")
 
-        print("DEBUG: Creating WebSocket events...")
         order_event = self.order_event_for_full_fill_websocket_update(order=order)
         trade_event = self.trade_event_for_full_fill_websocket_update(order=order)
-        print(f"DEBUG: Order event: {order_event}")
-        print(f"DEBUG: Trade event: {trade_event}")
 
-        print("DEBUG: Setting up mock user stream...")
         mock_queue = AsyncMock()
         event_messages = []
         if trade_event:
             event_messages.append(trade_event)
-            print("DEBUG: Added trade event to messages")
         if order_event:
             event_messages.append(order_event)
-            print("DEBUG: Added order event to messages")
         event_messages.append(asyncio.CancelledError)
-        print(f"DEBUG: Total messages: {len(event_messages)}")
         mock_queue.get.side_effect = event_messages
         self.exchange._user_stream_tracker._user_stream = mock_queue
-        print("DEBUG: Mock user stream configured")
 
-        print(f"DEBUG: is_order_fill_http_update_executed_during_websocket_order_event_processing = {self.is_order_fill_http_update_executed_during_websocket_order_event_processing}")
         if self.is_order_fill_http_update_executed_during_websocket_order_event_processing:
-            print("DEBUG: Configuring full fill trade response...")
             self.configure_full_fill_trade_response(
                 order=order,
                 mock_api=mock_api)
-            print("DEBUG: Trade response configured")
 
-        print("DEBUG: Starting user stream event listener...")
         try:
             self.async_run_with_timeout(self.exchange._user_stream_event_listener())
-            print("DEBUG: User stream event listener completed normally")
         except asyncio.CancelledError:
-            print("DEBUG: User stream event listener cancelled (expected)")
             pass
 
-        print("DEBUG: Waiting for order to be completely filled...")
         self.async_run_with_timeout(order.wait_until_completely_filled())
-        print("DEBUG: Order completely filled")
 
         self.async_run_with_timeout(asyncio.sleep(0.1))
-        print("DEBUG: Sleep completed")
 
-        print("DEBUG: Checking fill event...")
         fill_event: OrderFilledEvent = self.order_filled_logger.event_log[0]
-        print(f"DEBUG: Got fill event: {fill_event}")
 
         self.assertEqual(self.exchange.current_timestamp, fill_event.timestamp)
         self.assertEqual(order.client_order_id, fill_event.order_id)
@@ -953,14 +926,9 @@ class BackpackExchangeTests(AbstractExchangeConnectorTests.ExchangeConnectorTest
         self.assertEqual(order.amount, fill_event.amount)
         expected_fee = self.expected_fill_fee
         self.assertEqual(expected_fee, fill_event.trade_fee)
-        print("DEBUG: Fill event assertions passed")
 
-        print("DEBUG: Checking final order state...")
         self.assertEqual(0, len(self.buy_order_completed_logger.event_log))
         self.assertNotIn(order.client_order_id, self.exchange.in_flight_orders)
         self.assertNotIn(order.client_order_id, self.exchange._order_tracker.lost_orders)
         self.assertTrue(order.is_filled)
         self.assertTrue(order.is_failure)
-        print(f"DEBUG: Final order state - is_filled: {order.is_filled}, is_failure: {order.is_failure}")
-
-        print("DEBUG: User stream test completed successfully!")

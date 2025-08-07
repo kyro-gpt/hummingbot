@@ -28,20 +28,20 @@ class BackpackOrderBookTests(TestCase):
         self.assertEqual("SOL-USDC", snapshot_message.trading_pair)
         self.assertEqual(OrderBookMessageType.SNAPSHOT, snapshot_message.type)
         self.assertEqual(1640000000.0, snapshot_message.timestamp)
-        self.assertEqual("12345", snapshot_message.update_id)  # String in real format
+        self.assertEqual(12345, snapshot_message.update_id)  # Now integer after conversion
         self.assertEqual(-1, snapshot_message.trade_id)
 
         # Check bids
         self.assertEqual(2, len(snapshot_message.bids))
         self.assertEqual(100.5, snapshot_message.bids[0].price)
         self.assertEqual(10.0, snapshot_message.bids[0].amount)
-        self.assertEqual("12345", snapshot_message.bids[0].update_id)
+        self.assertEqual(12345, snapshot_message.bids[0].update_id)  # Now integer
 
         # Check asks
         self.assertEqual(2, len(snapshot_message.asks))
         self.assertEqual(101.0, snapshot_message.asks[0].price)
         self.assertEqual(15.0, snapshot_message.asks[0].amount)
-        self.assertEqual("12345", snapshot_message.asks[0].update_id)
+        self.assertEqual(12345, snapshot_message.asks[0].update_id)  # Now integer
 
     def test_diff_message_from_exchange(self):
         # Real Backpack WebSocket depth update format

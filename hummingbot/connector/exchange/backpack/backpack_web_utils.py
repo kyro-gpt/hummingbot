@@ -5,6 +5,9 @@ This module provides utilities for building URLs and creating web assistants
 for the Backpack exchange connector.
 """
 
+import time
+from typing import Optional
+
 from hummingbot.connector.exchange.backpack import backpack_constants as CONSTANTS
 from hummingbot.core.api_throttler.async_throttler import AsyncThrottler
 from hummingbot.core.web_assistant.web_assistants_factory import WebAssistantsFactory
@@ -294,3 +297,38 @@ def wss_url(base_ws_url: str, domain: str = CONSTANTS.DEFAULT_DOMAIN) -> str:
         Complete WebSocket URL
     """
     return base_ws_url
+
+
+async def get_current_server_time(
+    throttler: Optional[AsyncThrottler] = None,
+    domain: str = CONSTANTS.DEFAULT_DOMAIN,
+) -> float:
+    """
+    Get the current server time from Backpack's /time endpoint.
+
+    Args:
+        throttler: Optional throttler for rate limiting
+        domain: Optional domain (unused but kept for interface compatibility)
+
+    Returns:
+        Current server time in seconds as a float
+    """
+    from hummingbot.core.web_assistant.connections.data_types import RESTMethod
+    from hummingbot.core.web_assistant.web_assistants_factory import WebAssistantsFactory
+
+    throttler = throttler or create_throttler()
+    api_factory = WebAssistantsFactory(throttler=throttler)
+    rest_assistant = await api_factory.get_rest_assistant()
+
+    try:
+        response = await rest_assistant.execute_request(
+            url=public_rest_url(path_url=CONSTANTS.TIME_PATH_URL, domain=domain),
+            method=RESTMethod.GET,
+            throttler_limit_id=CONSTANTS.TIME_PATH_URL,
+        )
+        # Backpack returns time in milliseconds, convert to seconds
+        server_time_ms = int(response)
+        return float(server_time_ms / 1000.0)
+    except Exception:
+        # Fallback to local time if server time fetch fails
+        return time.time()

@@ -84,7 +84,7 @@ class BackpackExchange(ExchangePyBase):
         return BackpackAuth(
             api_key=self.api_key,
             secret_key=self.secret_key,
-            time_provider=self._time_synchronizer
+            time_provider=None  # Use real time.time() since Backpack doesn't require time sync
         )
 
     @property
@@ -185,13 +185,12 @@ class BackpackExchange(ExchangePyBase):
         return is_not_found
 
     def _is_request_exception_related_to_time_synchronizer(self, request_exception: Exception):
-        """Check if the exception is related to time synchronization issues."""
-        error_description = str(request_exception)
-        # Backpack specific time sync error patterns - to be updated based on actual API errors
-        is_time_synchronizer_related = ("timestamp" in error_description.lower() and
-                                        ("invalid" in error_description.lower() or
-                                        "expired" in error_description.lower()))
-        return is_time_synchronizer_related
+        """
+        Check if the exception is related to time synchronization issues.
+
+        Since Backpack doesn't require time synchronization, this always returns False.
+        """
+        return False
 
     def _is_order_not_found_during_status_update_error(self, status_update_exception: Exception) -> bool:
         """Check if the exception indicates an order was not found during status update."""
@@ -204,8 +203,6 @@ class BackpackExchange(ExchangePyBase):
             "not found" in error_description.lower()
         )
         return is_not_found
-
-
 
     def _create_web_assistants_factory(self) -> WebAssistantsFactory:
         """Creates the web assistants factory for API calls."""
@@ -621,7 +618,7 @@ class BackpackExchange(ExchangePyBase):
 
                 except Exception as e:
                     # Log the exact error format expected by tests
-                    self.logger().error(f"Error parsing the trading pair rule {market_info}. Skipping.")
+                    self.logger().error(f"Error parsing the trading pair rule {market_info}. Skipping. {e}")
                     continue
 
             self.logger().info(f"Successfully parsed {len(trading_rules)} trading rules from {len(markets_data)} markets")
@@ -633,8 +630,6 @@ class BackpackExchange(ExchangePyBase):
             self.logger().debug(f"Full traceback: {traceback.format_exc()}")
             # Return empty list on error - don't block connector initialization
             return []
-
-
 
     async def _update_balances(self):
         """
@@ -1095,19 +1090,19 @@ class BackpackExchange(ExchangePyBase):
                         # Convert exchange symbol to trading pair and extract base asset
                         trading_pair = await self.trading_pair_associated_to_exchange_symbol(symbol)
                         base_asset, quote_asset = trading_pair.split("-")
-                        
+
                         # Extract balance information
                         available = Decimal(str(event_data.get("available", "0")))
                         locked = Decimal(str(event_data.get("locked", "0")))
                         total = available + locked
-                        
+
                         # Update balances
                         self._account_available_balances[base_asset] = available
                         self._account_balances[base_asset] = total
-                        
+
                         self.logger().info(f"Updated balance for {base_asset}: available={available}, total={total}")
                         return
-                        
+
                     except Exception as symbol_error:
                         self.logger().debug(f"Could not parse symbol {symbol} for balance update: {symbol_error}")
 

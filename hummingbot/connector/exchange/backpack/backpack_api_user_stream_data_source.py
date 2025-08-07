@@ -114,15 +114,23 @@ class BackpackAPIUserStreamDataSource(UserStreamTrackerDataSource):
             # Get authenticated subscription parameters
             auth_params = self._auth.websocket_login_parameters()
 
-            # Use the exact same streams that worked in discovery test
+            # Build streams dynamically based on connector's trading pairs
             streams = [
                 "account.orderUpdate",
                 "account.positionUpdate",
                 "account.rfqUpdate",
-                "account.orderUpdate.SOL_USDC",
-                "account.positionUpdate.SOL_USDC",
-                "account.orderUpdate.SOL_USDC_SPOT",
             ]
+
+            # Add trading pair specific streams for all configured pairs
+            trading_pairs = self._connector.trading_pairs if hasattr(self._connector, 'trading_pairs') else []
+            for trading_pair in trading_pairs:
+                # Convert Hummingbot format (e.g., "ETH-USDC") to Backpack format (e.g., "ETH_USDC")
+                exchange_symbol = trading_pair.replace("-", "_")
+                streams.extend([
+                    f"account.orderUpdate.{exchange_symbol}",
+                    f"account.positionUpdate.{exchange_symbol}",
+                    f"account.orderUpdate.{exchange_symbol}_SPOT",
+                ])
 
             # Create authenticated subscription payload following Backpack's format
             subscription_payload = {

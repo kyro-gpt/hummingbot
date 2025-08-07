@@ -62,7 +62,7 @@ class BackpackOrderBook(OrderBook):
         # Backpack returns: {"bids": [[price, size], ...], "asks": [[price, size], ...], "lastUpdateId": id}
         content = {
             "trading_pair": msg["trading_pair"],
-            "update_id": msg.get("lastUpdateId", 0),
+            "update_id": int(msg.get("lastUpdateId", 0)),  # Convert to integer
             "bids": msg.get("bids", []),
             "asks": msg.get("asks", [])
         }
@@ -118,8 +118,8 @@ class BackpackOrderBook(OrderBook):
         # Extract data from Backpack WebSocket depth update format
         content = {
             "trading_pair": msg["trading_pair"],
-            "update_id": msg.get("u", 0),           # Last update ID in event
-            "first_update_id": msg.get("U", 0),    # First update ID in event
+            "update_id": int(msg.get("u", 0)),           # Last update ID in event - convert to integer
+            "first_update_id": int(msg.get("U", 0)),    # First update ID in event - convert to integer
             "bids": msg.get("b", []),               # Bids array
             "asks": msg.get("a", [])                # Asks array
         }

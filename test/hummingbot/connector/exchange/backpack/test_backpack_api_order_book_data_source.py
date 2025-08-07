@@ -203,12 +203,12 @@ class BackpackAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
         self.assertEqual(2, len(sent_subscription_messages))
         expected_trade_subscription = {
             "method": "SUBSCRIBE",
-            "params": [f"{self.ex_trading_pair.lower()}.trades"],
+            "params": [f"trade.{self.ex_trading_pair}"],  # Correct format: trade.SYMBOL
             "id": 1
         }
         expected_diff_subscription = {
             "method": "SUBSCRIBE",
-            "params": [f"{self.ex_trading_pair.lower()}.depth"],
+            "params": [f"depth.{self.ex_trading_pair}"],  # Correct format: depth.SYMBOL
             "id": 2
         }
 
