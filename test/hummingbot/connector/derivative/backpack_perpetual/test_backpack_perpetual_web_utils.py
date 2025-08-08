@@ -65,20 +65,25 @@ class BackpackPerpetualWebUtilsTestCases(unittest.TestCase):
         self.assertTrue(web_utils.is_public_endpoint(CONSTANTS.OPEN_INTEREST_PATH_URL))
 
     def test_trading_pair_conversion(self):
-        """Test trading pair format conversion functions"""
-        # Test Hummingbot to Backpack format
-        hb_pair = "BTC-USDC"
+        """Test trading pair format conversion functions for perpetual trading"""
+        # Test Hummingbot to Backpack perpetual format
+        hb_pair = "SOL-USDC"
         backpack_pair = web_utils.convert_to_exchange_trading_pair(hb_pair)
-        self.assertEqual("BTC_USDC", backpack_pair)
+        self.assertEqual("SOL_USDC_PERP", backpack_pair)
 
-        # Test Backpack to Hummingbot format
-        backpack_pair = "ETH_USDT"
+        # Test Backpack perpetual to Hummingbot format
+        backpack_pair = "ETH_USDT_PERP"
         hb_pair = web_utils.convert_from_exchange_trading_pair(backpack_pair)
         self.assertEqual("ETH-USDT", hb_pair)
 
         # Test format_trading_pair function
         formatted_pair = web_utils.format_trading_pair("SOL-USDC")
-        self.assertEqual("SOL_USDC", formatted_pair)
+        self.assertEqual("SOL_USDC_PERP", formatted_pair)
+
+        # Test handling of symbols without _PERP suffix (fallback)
+        backpack_pair_no_perp = "BTC_USD"
+        hb_pair_fallback = web_utils.convert_from_exchange_trading_pair(backpack_pair_no_perp)
+        self.assertEqual("BTC-USD", hb_pair_fallback)
 
     def test_endpoint_mapping_derivative_specific(self):
         """Test that derivative-specific endpoints are properly mapped"""

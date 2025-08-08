@@ -7,7 +7,7 @@ from hummingbot.client.config.config_data_types import BaseConnectorConfigMap
 from hummingbot.core.data_type.trade_fee import TradeFeeSchema
 
 CENTRALIZED = True
-EXAMPLE_PAIR = "BTC-USDC"  # Typical perpetual pair
+EXAMPLE_PAIR = "SOL-USDC"  # Typical perpetual pair (maps to SOL_USDC_PERP)
 
 # Derivative fees are typically higher than spot
 DEFAULT_FEES = TradeFeeSchema(

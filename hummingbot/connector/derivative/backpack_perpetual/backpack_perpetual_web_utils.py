@@ -266,41 +266,47 @@ def get_ws_message_frame() -> dict:
 
 def format_trading_pair(trading_pair: str) -> str:
     """
-    Convert Hummingbot trading pair format to Backpack format.
+    Convert Hummingbot trading pair format to Backpack perpetual format.
 
     Args:
-        trading_pair: Trading pair in Hummingbot format (e.g., "BTC-USDT")
+        trading_pair: Trading pair in Hummingbot format (e.g., "SOL-USDC")
 
     Returns:
-        Trading pair in Backpack format (e.g., "BTC_USDT")
+        Trading pair in Backpack perpetual format (e.g., "SOL_USDC_PERP")
     """
-    return trading_pair.replace("-", "_")
+    return trading_pair.replace("-", "_") + "_PERP"
 
 
 def convert_from_exchange_trading_pair(exchange_trading_pair: str) -> str:
     """
-    Convert Backpack trading pair format to Hummingbot format.
+    Convert Backpack perpetual trading pair format to Hummingbot format.
 
     Args:
-        exchange_trading_pair: Trading pair in Backpack format (e.g., "BTC_USDT")
+        exchange_trading_pair: Trading pair in Backpack perpetual format (e.g., "SOL_USDC_PERP")
 
     Returns:
-        Trading pair in Hummingbot format (e.g., "BTC-USDT")
+        Trading pair in Hummingbot format (e.g., "SOL-USDC")
     """
-    return exchange_trading_pair.replace("_", "-")
+    # Remove _PERP suffix and replace underscores with hyphens
+    if exchange_trading_pair.endswith("_PERP"):
+        base_pair = exchange_trading_pair[:-5]  # Remove "_PERP"
+        return base_pair.replace("_", "-")
+    else:
+        # Fallback for symbols without _PERP suffix
+        return exchange_trading_pair.replace("_", "-")
 
 
 def convert_to_exchange_trading_pair(hb_trading_pair: str) -> str:
     """
-    Convert Hummingbot trading pair format to Backpack format.
+    Convert Hummingbot trading pair format to Backpack perpetual format.
 
     Args:
-        hb_trading_pair: Trading pair in Hummingbot format (e.g., "BTC-USDT")
+        hb_trading_pair: Trading pair in Hummingbot format (e.g., "SOL-USDC")
 
     Returns:
-        Trading pair in Backpack format (e.g., "BTC_USDT")
+        Trading pair in Backpack perpetual format (e.g., "SOL_USDC_PERP")
     """
-    return hb_trading_pair.replace("-", "_")
+    return hb_trading_pair.replace("-", "_") + "_PERP"
 
 
 def wss_url(base_ws_url: str, domain: str = CONSTANTS.DEFAULT_DOMAIN) -> str:

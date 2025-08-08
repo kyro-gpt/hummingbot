@@ -36,11 +36,11 @@ TRADES_PATH_URL = "/trades"
 TRADES_HISTORY_PATH_URL = "/trades/history"
 
 # Derivative-specific public endpoints
-MARK_PRICES_PATH_URL = "/markPrices"
-FUNDING_RATES_PATH_URL = "/fundingRates"
+MARK_PRICES_PATH_URL = "/markPrices"        # ✅ CONFIRMED: Returns mark price + current funding rate
+FUNDING_RATES_PATH_URL = "/fundingRates"    # ✅ CONFIRMED: Historical funding rates by symbol
 OPEN_INTEREST_PATH_URL = "/openInterest"
-MARK_PRICE_PATH_URL = "/markPrice"
-INDEX_PRICE_PATH_URL = "/indexPrice"
+MARK_PRICE_PATH_URL = "/markPrice"          # May not exist - check during implementation
+INDEX_PRICE_PATH_URL = "/indexPrice"        # May not exist - check during implementation
 
 # Private API Endpoints (reuse from spot)
 ACCOUNT_PATH_URL = "/account"
@@ -91,10 +91,13 @@ WS_ORDERS_CHANNEL = "orders"
 WS_ACCOUNT_CHANNEL = "account"
 
 # Derivative-specific WebSocket channels
-WS_POSITION_CHANNEL = "position"       # Position updates
-WS_FUNDING_CHANNEL = "funding"         # Funding rate updates
-WS_MARK_PRICE_CHANNEL = "markPrice"    # Mark price updates
-WS_LIQUIDATION_CHANNEL = "liquidation"  # Liquidation notifications (if available)
+WS_POSITION_CHANNEL = "position"       # Position updates (may not exist - verify)
+# ❌ NO FUNDING WEBSOCKET STREAMS FOUND IN OPENAPI SPEC
+# WS_FUNDING_CHANNEL = "funding"         # Funding rate updates - NOT AVAILABLE
+# WS_MARK_PRICE_CHANNEL = "markPrice"    # Mark price updates - NOT AVAILABLE
+# WS_LIQUIDATION_CHANNEL = "liquidation" # Liquidation notifications - NOT AVAILABLE
+
+# Note: Funding data will be retrieved via REST API polling only
 
 # Funding Configuration
 FUNDING_FEE_POLL_INTERVAL = 300  # 5 minutes (300 seconds) - conservative starting point
