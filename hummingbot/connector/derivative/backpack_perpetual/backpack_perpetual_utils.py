@@ -33,7 +33,7 @@ def is_exchange_information_valid(exchange_info: Dict[str, Any]) -> bool:
 
     # Check if it's a futures/perpetual market (for derivative connector)
     market_type = exchange_info.get("marketType", "").upper()
-    is_derivative = market_type in ["FUTURE", "PERPETUAL"]
+    is_derivative = market_type in ["PERP", "PERPETUAL", "FUTURE"]
 
     # Check if required fields are present
     has_symbol = bool(exchange_info.get("symbol"))
@@ -133,22 +133,8 @@ class BackpackPerpetualConfigMap(BaseConnectorConfigMap):
         }
     )
 
-    # Derivative-specific configuration options
-    backpack_perpetual_leverage: int = Field(
-        default=1,
-        json_schema_extra={
-            "prompt": "Enter default leverage (1-20)",
-            "prompt_on_new": False,
-        }
-    )
-
-    backpack_perpetual_position_mode: str = Field(
-        default="ONEWAY",
-        json_schema_extra={
-            "prompt": "Enter position mode (ONEWAY/HEDGE)",
-            "prompt_on_new": False,
-        }
-    )
+    # Note: Leverage and position mode are managed at the account level via Backpack's API/UI
+    # These are not needed as connector configuration parameters
 
     model_config = ConfigDict(title="backpack_perpetual")
 
