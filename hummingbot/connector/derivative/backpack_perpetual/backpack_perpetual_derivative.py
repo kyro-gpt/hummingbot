@@ -190,46 +190,7 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
         """List of supported position modes"""
         return CONSTANTS.SUPPORTED_POSITION_MODES
 
-    @property
-    def status_dict(self) -> Dict[str, bool]:
-        """
-        Status dictionary with detailed logging for debugging "Market connectors not ready"
-        """
-        symbols_ready = self.trading_pair_symbol_map_ready()
-        order_books_ready = self.order_book_tracker.ready if self.order_book_tracker else False
-        balance_ready = not self.is_trading_required or len(self._account_balances) > 0
-        trading_rules_ready = len(self._trading_rules) > 0 if self.is_trading_required else True
-        user_stream_ready = self._is_user_stream_initialized()
-        
-        # Debug logging
-        print(f"🔍 CONNECTOR STATUS DEBUG:")
-        print(f"   📍 symbols_mapping_initialized: {symbols_ready}")
-        print(f"   📊 order_books_initialized: {order_books_ready}")
-        print(f"   💰 account_balance: {balance_ready} (balances: {len(self._account_balances)})")
-        print(f"   📋 trading_rule_initialized: {trading_rules_ready} (rules: {len(self._trading_rules)})")
-        print(f"   🔗 user_stream_initialized: {user_stream_ready}")
-        
-        if hasattr(self, '_user_stream_tracker') and self._user_stream_tracker:
-            if hasattr(self._user_stream_tracker, 'data_source'):
-                last_recv = self._user_stream_tracker.data_source.last_recv_time
-                print(f"   🔗   -> User stream last_recv_time: {last_recv}")
-                print(f"   🔗   -> User stream data source type: {type(self._user_stream_tracker.data_source)}")
-            else:
-                print(f"   🔗   -> User stream tracker has no data_source")
-        else:
-            print(f"   🔗   -> No user stream tracker found")
-            
-        all_ready = symbols_ready and order_books_ready and balance_ready and trading_rules_ready and user_stream_ready
-        print(f"   ✅ ALL READY: {all_ready}")
-        print()
-        
-        return {
-            "symbols_mapping_initialized": symbols_ready,
-            "order_books_initialized": order_books_ready,
-            "account_balance": balance_ready,
-            "trading_rule_initialized": trading_rules_ready,
-            "user_stream_initialized": user_stream_ready,
-        }
+
 
     def get_buy_collateral_token(self, trading_pair: str) -> str:
         """Get the collateral token for buy orders"""
@@ -416,7 +377,7 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
             for trading_rule in trading_rules_list:
                 self._trading_rules[trading_rule.trading_pair] = trading_rule
                 
-            print(f"🔧 DEBUG: Updated {len(trading_rules_list)} trading rules without resetting symbol mapping")  # TODO: Remove after debugging
+
             
         except Exception as e:
             self.logger().error(f"Error updating trading rules: {e}", exc_info=True)
@@ -1056,57 +1017,13 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
         if not self.trading_pair_symbol_map_ready():
             raise ValueError("Trading pair symbol mapping not initialized properly")
             
-        print(f"🔧 DEBUG: Symbol mapping ready before starting network")  # TODO: Remove after debugging
-        print(f"🔧 DEBUG: Connector trading pairs: {self._trading_pairs}")  # TODO: Remove after debugging
+
         
         # Then initialize trading rules (depends on symbol mapping)
         await self._update_trading_rules()
         
         # Finally start the parent network (creates order book tracker)
-        print(f"🔧 DEBUG: About to call super().start_network() to create order book tracker")  # TODO: Remove after debugging
-        
-        # Check if we have the _get_order_book_tracker method
-        print(f"🔧 DEBUG: _get_order_book_tracker method exists: {hasattr(self, '_get_order_book_tracker')}")  # TODO: Remove after debugging
-        print(f"🔧 DEBUG: _create_order_book_tracker method exists: {hasattr(self, '_create_order_book_tracker')}")  # TODO: Remove after debugging
-        print(f"🔧 DEBUG: _order_book_tracker attr before super(): {hasattr(self, '_order_book_tracker')} - {getattr(self, '_order_book_tracker', 'NOT_SET')}")  # TODO: Remove after debugging
-        
         await super().start_network()
-        
-        # Debug order book creation results
-        print(f"🔧 DEBUG: After super().start_network() - checking order book tracker")  # TODO: Remove after debugging
-        print(f"🔧 DEBUG: _order_book_tracker attr after super(): {getattr(self, '_order_book_tracker', 'NOT_SET')}")  # TODO: Remove after debugging
-        
-        # CRITICAL: Ensure order book tracker is created and started
-        if not self._order_book_tracker:
-            print(f"🔧 DEBUG: Order book tracker not created by super(), creating manually...")  # TODO: Remove after debugging
-            self._order_book_tracker = self._get_order_book_tracker()
-            print(f"🔧 DEBUG: Manual tracker creation result: {type(self._order_book_tracker)}")  # TODO: Remove after debugging
-        
-        # Try to call _get_order_book_tracker manually to see what happens
-        try:
-            print(f"🔧 DEBUG: Manually calling _get_order_book_tracker()...")  # TODO: Remove after debugging
-            tracker = self._get_order_book_tracker()
-            print(f"🔧 DEBUG: Manual call returned: {type(tracker)} with {len(tracker._order_books) if hasattr(tracker, '_order_books') else 'NO_ORDER_BOOKS'} order books")  # TODO: Remove after debugging
-            
-            # Check if the tracker has the right trading pairs
-            if hasattr(tracker, '_trading_pairs'):
-                print(f"🔧 DEBUG: Tracker trading pairs: {tracker._trading_pairs}")  # TODO: Remove after debugging
-                
-            # Check if we need to start the tracker manually
-            if hasattr(tracker, 'start'):
-                print(f"🔧 DEBUG: Tracker has start method, attempting to start...")  # TODO: Remove after debugging
-                try:
-                    tracker.start()
-                    print(f"🔧 DEBUG: Tracker started, order books now: {len(tracker._order_books)}")  # TODO: Remove after debugging
-                except Exception as start_err:
-                    print(f"🔧 DEBUG: Failed to start tracker: {start_err}")  # TODO: Remove after debugging
-            else:
-                print(f"🔧 DEBUG: Tracker has no start method")  # TODO: Remove after debugging
-                
-        except Exception as e:
-            print(f"🔧 DEBUG: Manual _get_order_book_tracker() failed: {e}")  # TODO: Remove after debugging
-            import traceback
-            traceback.print_exc()
 
     async def _make_network_check_request(self):
         """
