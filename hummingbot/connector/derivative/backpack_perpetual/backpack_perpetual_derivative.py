@@ -192,6 +192,8 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
 
 
 
+
+
     def get_buy_collateral_token(self, trading_pair: str) -> str:
         """Get the collateral token for buy orders"""
         trading_rule: TradingRule = self._trading_rules[trading_pair]
@@ -232,15 +234,12 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
         """Create order book tracker for derivative trading"""
         from hummingbot.core.data_type.order_book_tracker import OrderBookTracker
         
-        print(f"🔧 DEBUG: Creating order book tracker for pairs: {self._trading_pairs}")  # TODO: Remove after debugging
         data_source = self._create_order_book_data_source()
-        print(f"🔧 DEBUG: Created data source: {type(data_source)}")  # TODO: Remove after debugging
         
         tracker = OrderBookTracker(
             data_source=data_source,
             trading_pairs=self._trading_pairs
         )
-        print(f"🔧 DEBUG: Created tracker with {len(tracker._order_books)} initial order books")  # TODO: Remove after debugging
         return tracker
 
     def _create_order_book_data_source(self) -> PerpetualAPIOrderBookDataSource:
@@ -708,6 +707,35 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
             self.logger().error(f"Error fetching funding payment for {trading_pair}: {e}", exc_info=True)
             return 0, Decimal("0"), Decimal("0")
 
+    async def _get_last_traded_price(self, trading_pair: str) -> float:
+        """Get the last traded price for a derivative trading pair."""
+        try:
+            symbol = await self.exchange_symbol_associated_to_pair(trading_pair=trading_pair)
+            params = {"symbol": symbol}
+
+            rest_assistant = await self._web_assistants_factory.get_rest_assistant()
+            url = web_utils.get_rest_url_for_endpoint(
+                endpoint=CONSTANTS.TICKER_PATH_URL,
+                domain=self._domain
+            )
+
+            response = await rest_assistant.execute_request(
+                url=url,
+                method=RESTMethod.GET,
+                params=params,
+                throttler_limit_id=CONSTANTS.TICKER_PATH_URL,
+            )
+
+            # For derivative markets, use mark price if available, otherwise last price
+            if "markPrice" in response:
+                return float(response["markPrice"])
+            else:
+                return float(response.get("lastPrice", 0))
+
+        except Exception as e:
+            self.logger().error(f"Error fetching last traded price for {trading_pair}: {e}", exc_info=True)
+            return 0.0
+
     # Order management methods (inherited and enhanced)
 
     async def _place_order(
@@ -722,6 +750,9 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
         **kwargs,
     ) -> Tuple[str, float]:
         """Place order with position action support"""
+        
+
+        
         # Convert trading pair to exchange symbol
         symbol = web_utils.convert_to_exchange_trading_pair(trading_pair)
 

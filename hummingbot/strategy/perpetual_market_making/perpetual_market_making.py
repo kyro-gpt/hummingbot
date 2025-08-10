@@ -274,7 +274,11 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
         else:
             price = price_provider.get_price_by_type(self._price_type)
         if price.is_nan():
-            price = price_provider.get_price_by_type(PriceType.MidPrice)
+            try:
+                price = price_provider.get_price_by_type(PriceType.MidPrice)
+                print(f"🔄 PRICE FALLBACK: Using MidPrice = {price}")
+            except Exception as e:
+                print(f"🚨 PRICE FALLBACK FAILED: MidPrice also failed: {e}")
         return price
 
     def get_last_price(self) -> float:
@@ -943,6 +947,44 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
                 proposal is not None and
                 len(self.active_orders) == 0)
 
+    def _log_strategy_order_batch_debug(self, proposal: Proposal, position_action: PositionAction):
+        """Log market state to check spreads"""
+        try:
+            # Get market data
+            market = self._market_info.market
+            order_book = market.get_order_book(self.trading_pair)
+            bids = list(order_book.bid_entries())[:3]
+            asks = list(order_book.ask_entries())[:3]
+            
+            if not bids or not asks:
+                return
+                
+            # Calculate market metrics
+            best_bid = float(bids[0][0])
+            best_ask = float(asks[0][0])
+            mid_price = (best_bid + best_ask) / 2
+            spread = best_ask - best_bid
+            spread_pct = (spread / mid_price * 100) if mid_price else 0
+            
+            # Format order book
+            bid_str = " | ".join([f"{p:.4f}@{a:.3f}" for p, a, _ in bids])
+            ask_str = " | ".join([f"{p:.4f}@{a:.3f}" for p, a, _ in asks])
+            
+            log_msg = (
+                f"\n📊 MARKET SPREAD CHECK\n"
+                f"   🏷️  Pair: {self.trading_pair}\n"
+                f"   💰 Best Bid: {best_bid:.4f} | Best Ask: {best_ask:.4f}\n"
+                f"   🎯 Mid: {mid_price:.4f} | Spread: {spread:.4f} USDC ({spread_pct:.3f}%)\n"
+                f"   📈 Bids: {bid_str}\n"
+                f"   📉 Asks: {ask_str}\n"
+            )
+            
+            self.logger().info(log_msg)
+            print(log_msg)
+                
+        except Exception as e:
+            self.logger().error(f"❌ Market debug error: {e}", exc_info=True)
+
     def execute_orders_proposal(self, proposal: Proposal, position_action: PositionAction):
         orders_created = False
 
@@ -996,7 +1038,10 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
                 if position_action == PositionAction.CLOSE:
                     self._exit_orders[ask_order_id] = self.current_timestamp
                 orders_created = True
+        
+        # 🎯 STRATEGY BATCH ORDER LOGGING - Log market context after placing orders
         if orders_created:
+            self._log_strategy_order_batch_debug(proposal, position_action)
             self.set_timers()
 
     def set_timers(self):
