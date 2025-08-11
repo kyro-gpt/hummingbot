@@ -296,6 +296,9 @@ DEFAULT_FEES = {
 }
 
 # Error Codes (same as spot)
+ORDER_NOT_FOUND_ERROR_CODE = "INVALID_CLIENT_REQUEST"
+ORDER_NOT_FOUND_MESSAGE = "Order not found"
+
 API_ERROR_CODES = {
     400: "Bad Request",
     401: "Unauthorized",

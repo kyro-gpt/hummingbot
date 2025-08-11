@@ -213,9 +213,7 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
         """Check if status update exception indicates order not found"""
         return "404" in str(status_update_exception) or "not found" in str(status_update_exception).lower()
 
-    def _is_order_not_found_during_cancelation_error(self, cancelation_exception: Exception) -> bool:
-        """Check if cancellation exception indicates order not found"""
-        return "404" in str(cancelation_exception) or "not found" in str(cancelation_exception).lower()
+
 
     def _create_web_assistants_factory(self) -> WebAssistantsFactory:
         """Create web assistants factory with authentication"""
@@ -810,36 +808,38 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
         client_id = int.from_bytes(hash_bytes[:4], byteorder='big')
         return client_id
 
-    async def _place_cancel(self, order_id: str, tracked_order: InFlightOrder) -> bool:
-        """Cancel an order"""
+    def _is_order_not_found_during_cancelation_error(self, cancelation_exception: Exception) -> bool:
+        """Check if the cancellation exception indicates that the order was not found"""
+        error_str = str(cancelation_exception)
+        # Check for Backpack-specific order not found patterns
+        # Exception format: "Error executing request DELETE... Error: {"code":"INVALID_CLIENT_REQUEST","message":"Order not found"}"
+        return (CONSTANTS.ORDER_NOT_FOUND_ERROR_CODE in error_str and 
+                CONSTANTS.ORDER_NOT_FOUND_MESSAGE in error_str)
+
+    async def _place_cancel(self, order_id: str, tracked_order: InFlightOrder):
+        symbol = await self.exchange_symbol_associated_to_pair(trading_pair=tracked_order.trading_pair)
+        api_params = {
+            "clientId": self._generate_client_order_id(tracked_order.client_order_id),
+            "symbol": symbol
+        }
         try:
-            rest_assistant = await self._web_assistants_factory.get_rest_assistant()
-
-            url = web_utils.get_rest_url_for_endpoint(
-                endpoint=CONSTANTS.ORDER_PATH_URL,
-                domain=self._domain
-            )
-
-            # Use client order ID and symbol for cancellation (required for derivative API)
-            symbol = await self.exchange_symbol_associated_to_pair(trading_pair=tracked_order.trading_pair)
-            data = {
-                "clientId": self._generate_client_order_id(tracked_order.client_order_id),
-                "symbol": symbol
-            }
-
-            response = await rest_assistant.execute_request(
-                url=url,
-                method=RESTMethod.DELETE,
-                data=data,  # Use data instead of params for DELETE
-                throttler_limit_id=CONSTANTS.ORDER_PATH_URL,
-                is_auth_required=True,
-            )
-
+            cancel_result = await self._api_delete(
+                path_url=CONSTANTS.ORDER_PATH_URL,
+                data=api_params,
+                is_auth_required=True)
             return True
-
         except Exception as e:
-            self.logger().error(f"Error cancelling order {order_id}: {e}", exc_info=True)
-            return False
+            error_str = str(e)
+            # Check if this is a "Order not found" error in the exception message
+            if (CONSTANTS.ORDER_NOT_FOUND_ERROR_CODE in error_str and
+                CONSTANTS.ORDER_NOT_FOUND_MESSAGE in error_str):
+                self.logger().debug(f"The order {order_id} does not exist on Backpack Perpetuals. "
+                                    f"No cancelation needed.")
+                await self._order_tracker.process_order_not_found(order_id)
+                # Reconstruct error message similar to Binance pattern
+                raise IOError(f"{CONSTANTS.ORDER_NOT_FOUND_ERROR_CODE} - {CONSTANTS.ORDER_NOT_FOUND_MESSAGE}")
+            # Re-raise other exceptions
+            raise
 
     async def _request_order_status(self, tracked_order: InFlightOrder) -> OrderUpdate:
         """Request order status from exchange"""
