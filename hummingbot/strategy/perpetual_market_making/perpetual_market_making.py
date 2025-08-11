@@ -511,7 +511,6 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
                 self._ts_peak_ask_price = market.get_price(self.trading_pair, False)
                 self._ts_peak_bid_price = market.get_price(self.trading_pair, True)
             else:
-                self.logger().info(f"🔍 SESSION POSITIONS: {session_positions}")
                 self.manage_positions(session_positions)
         finally:
             self._last_timestamp = timestamp
@@ -520,11 +519,13 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
         mode = self._position_mode
 
         proposals = self.profit_taking_proposal(mode, session_positions)
+        self.logger().info(f"🔍 PROFIT TAKING PROPOSALS: {proposals}, {session_positions}")
         if proposals is not None:
             self.execute_orders_proposal(proposals, PositionAction.CLOSE)
 
         # check if stop loss needs to be placed
         proposals = self.stop_loss_proposal(mode, session_positions)
+        self.logger().info(f"🔍 STOP LOSS PROPOSALS: {proposals}, {session_positions}")
         if proposals is not None:
             self.execute_orders_proposal(proposals, PositionAction.CLOSE)
 

@@ -539,7 +539,7 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
                     client_order_id=tracked_order.client_order_id,
                     exchange_order_id=tracked_order.exchange_order_id,
                     trading_pair=tracked_order.trading_pair,
-                    fee=DeductedFromReturnsTradeFee([TokenAmount(amount=fee_amount, token=fee_asset)]),
+                    fee=DeductedFromReturnsTradeFee(flat_fees=[TokenAmount(amount=fee_amount, token=fee_asset)]),
                     fill_base_amount=fill_quantity,
                     fill_quote_amount=fill_quantity * fill_price,
                     fill_price=fill_price,
@@ -683,7 +683,14 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
 
             if isinstance(response, list) and len(response) > 0:
                 payment_data = response[0]
-                timestamp = int(payment_data.get("intervalEndTimestamp", "0"))
+                timestamp_str = payment_data.get("intervalEndTimestamp", "0")
+                if timestamp_str and timestamp_str != "0":
+                    # Parse ISO timestamp string to unix timestamp
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                    timestamp = int(dt.timestamp())
+                else:
+                    timestamp = 0
                 funding_rate = Decimal(str(payment_data.get("fundingRate", "0")))
                 payment_amount = Decimal(str(payment_data.get("quantity", "0")))
 
@@ -987,7 +994,7 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
                         client_order_id=order.client_order_id,
                         exchange_order_id=order.exchange_order_id,
                         trading_pair=order.trading_pair,
-                        fee=DeductedFromReturnsTradeFee([TokenAmount(amount=fee_amount, token=fee_asset)]),
+                        fee=DeductedFromReturnsTradeFee(flat_fees=[TokenAmount(amount=fee_amount, token=fee_asset)]),
                         fill_base_amount=fill_quantity,
                         fill_quote_amount=fill_quantity * fill_price,
                         fill_price=fill_price,

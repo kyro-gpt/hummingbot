@@ -125,26 +125,27 @@ class BackpackPerpetualAPIUserStreamDataSource(UserStreamTrackerDataSource):
             # Generate authentication parameters
             auth_params = self._auth.websocket_login_parameters()
 
-            # Subscribe to account streams
+            # Subscribe to account streams using the SAME format as spot
+            # Derivatives use the same WebSocket stream names as spot trading
             streams = [
                 "account.orderUpdate",     # Order status changes and fills
                 "account.positionUpdate",  # Position changes and PnL updates
                 # "account.rfqUpdate",     # RFQ updates (if needed later)
             ]
 
-            # Add symbol-specific streams if needed
+            # Add symbol-specific streams for derivatives
             for trading_pair in self._trading_pairs:
                 symbol = self._connector.web_utils.convert_to_exchange_trading_pair(trading_pair)
                 streams.extend([
-                    f"{symbol}.orderUpdate",     # Symbol-specific order updates
-                    f"{symbol}.positionUpdate",  # Symbol-specific position updates
+                    f"account.orderUpdate.{symbol}",     # Symbol-specific order updates
+                    f"account.positionUpdate.{symbol}",  # Symbol-specific position updates
                 ])
 
-            # Create subscription message
+            # Create subscription message (exact same format as working spot connector)
             subscription_message = {
                 "method": "SUBSCRIBE",
                 "params": streams,
-                **auth_params,  # Include signature, timestamp, window
+                "signature": auth_params["signature"]  # This is [verifying_key, signature, timestamp, window]
             }
 
             subscribe_request: WSJSONRequest = WSJSONRequest(payload=subscription_message)
