@@ -470,7 +470,7 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
 
     async def _process_position_event(self, event_data: Dict[str, Any]):
         """Process position update events from user stream"""
-        try:
+        try:            
             # Extract position information from Backpack event
             # Reference format from user stream data source:
             # {
@@ -507,6 +507,9 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
             position_side = PositionSide.LONG if amount > 0 else PositionSide.SHORT if amount < 0 else None
 
             if position_side is not None and amount != 0:
+                # Use configured leverage (5x) for now - IMF calculation was causing issues
+                leverage = Decimal("5")
+                
                 # Create or update position
                 position = Position(
                     trading_pair=trading_pair,
@@ -514,7 +517,7 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
                     unrealized_pnl=pnl_unrealized,
                     entry_price=entry_price,
                     amount=abs(amount),
-                    leverage=Decimal("1"),  # Will be updated from API
+                    leverage=leverage,
                 )
 
                 # Update position tracker
@@ -588,8 +591,10 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
             if isinstance(response, list):
                 for position_data in response:
                     await self._process_position_data(position_data)
+            else:
+                self.logger().warning(f"Unexpected position response format: {type(response)}")
 
-            self._last_position_update_timestamp = current_time
+            self._last_position_update_timestamp = time.time()
 
         except Exception as e:
             self.logger().error(f"Error updating positions: {e}", exc_info=True)
@@ -607,7 +612,7 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
             pnl_realized = Decimal(str(position_data.get("pnlRealized", "0")))
             mark_price = Decimal(str(position_data.get("markPrice", "0")))
             liquidation_price = Decimal(str(position_data.get("estLiquidationPrice", "0")))
-
+            
             # Convert symbol to trading pair
             trading_pair = web_utils.convert_from_exchange_trading_pair(symbol)
 
@@ -623,6 +628,9 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
                 self.set_position(trading_pair, None)
                 return
 
+            # Use configured leverage (5x) 
+            leverage = Decimal("5")
+
             # Create position object
             position = Position(
                 trading_pair=trading_pair,
@@ -630,7 +638,7 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
                 unrealized_pnl=pnl_unrealized,
                 entry_price=entry_price,
                 amount=amount,
-                leverage=Decimal("1"),  # Default leverage, will be updated if available
+                leverage=leverage,
             )
 
             # Update position tracker
@@ -1179,5 +1187,13 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
         if position is None or position.amount == 0:
             # Remove closed positions
             self._account_positions.pop(trading_pair, None)
+            # Also remove from perpetual trading object
+            pos_key = self._perpetual_trading.position_key(trading_pair, PositionSide.LONG)
+            self._perpetual_trading.remove_position(pos_key)
+            pos_key = self._perpetual_trading.position_key(trading_pair, PositionSide.SHORT)
+            self._perpetual_trading.remove_position(pos_key)
         else:
+            # Store in both our local dict and the perpetual trading object
             self._account_positions[trading_pair] = position
+            pos_key = self._perpetual_trading.position_key(trading_pair, position.position_side)
+            self._perpetual_trading.set_position(pos_key, position)

@@ -274,11 +274,7 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
         else:
             price = price_provider.get_price_by_type(self._price_type)
         if price.is_nan():
-            try:
-                price = price_provider.get_price_by_type(PriceType.MidPrice)
-                print(f"🔄 PRICE FALLBACK: Using MidPrice = {price}")
-            except Exception as e:
-                print(f"🚨 PRICE FALLBACK FAILED: MidPrice also failed: {e}")
+            price = price_provider.get_price_by_type(PriceType.MidPrice)
         return price
 
     def get_last_price(self) -> float:
@@ -487,6 +483,7 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
                                           "making may be dangerous when markets or networks are unstable.")
 
             if len(session_positions) == 0:
+                self.logger().info(f"🔍 INITIATING ORDER CREATION")
                 self._exit_orders = dict()  # Empty list of exit order at this point to reduce size
                 proposal = None
                 if self._create_timestamp <= self.current_timestamp:
@@ -514,6 +511,7 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
                 self._ts_peak_ask_price = market.get_price(self.trading_pair, False)
                 self._ts_peak_bid_price = market.get_price(self.trading_pair, True)
             else:
+                self.logger().info(f"🔍 SESSION POSITIONS: {session_positions}")
                 self.manage_positions(session_positions)
         finally:
             self._last_timestamp = timestamp
