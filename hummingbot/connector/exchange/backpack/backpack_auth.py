@@ -111,9 +111,13 @@ class BackpackAuth(AuthBase):
         for key, value in sorted(body_params.items()):
             # Convert value to string and remove quotes from JSON string values
             # as per Rust implementation: v.trim_start_matches('"').trim_end_matches('"')
-            value_str = str(value)
-            if value_str.startswith('"') and value_str.endswith('"'):
-                value_str = value_str[1:-1]  # Remove surrounding quotes
+            if isinstance(value, bool):
+                # Convert Python boolean to lowercase string for JSON compatibility
+                value_str = str(value).lower()
+            else:
+                value_str = str(value)
+                if value_str.startswith('"') and value_str.endswith('"'):
+                    value_str = value_str[1:-1]  # Remove surrounding quotes
             parts.append(f"{key}={value_str}")
 
         # Add timestamp and window

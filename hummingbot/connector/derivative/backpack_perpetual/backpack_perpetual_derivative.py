@@ -562,19 +562,10 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
             if current_time - self._last_position_update_timestamp < self._position_update_interval:
                 return
 
-            # Request position data
-            rest_assistant = await self._web_assistants_factory.get_rest_assistant()
-
-            url = web_utils.get_rest_url_for_endpoint(
-                endpoint=CONSTANTS.POSITION_PATH_URL,
-                domain=self._domain
-            )
-
-            response = await rest_assistant.execute_request(
-                url=url,
-                method=RESTMethod.GET,
-                throttler_limit_id=CONSTANTS.POSITION_PATH_URL,
-                is_auth_required=True,
+            # Request position data using _api_get (consistent with base pattern)
+            response = await self._api_get(
+                path_url=CONSTANTS.POSITION_PATH_URL,
+                is_auth_required=True
             )
 
             # Process position data
@@ -772,26 +763,18 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
         if position_action == PositionAction.CLOSE:
             order_data["reduceOnly"] = True
 
-        # Execute request
-        rest_assistant = await self._web_assistants_factory.get_rest_assistant()
-
-        url = web_utils.get_rest_url_for_endpoint(
-            endpoint=CONSTANTS.ORDER_PATH_URL,
-            domain=self._domain
-        )
-
-        response = await rest_assistant.execute_request(
-            url=url,
-            method=RESTMethod.POST,
+        # Execute request using _api_post (same pattern as spot connector)
+        response = await self._api_post(
+            path_url=CONSTANTS.ORDER_PATH_URL,
             data=order_data,
-            throttler_limit_id=CONSTANTS.ORDER_PATH_URL,
-            is_auth_required=True,
+            is_auth_required=True
         )
 
-        # Extract exchange order ID
-        exchange_order_id = response.get("id", "")
+        # Extract exchange order ID and timestamp
+        exchange_order_id = str(response["id"])
+        timestamp = response["createdAt"] / 1000.0  # Convert milliseconds to seconds
 
-        return exchange_order_id, time.time()
+        return exchange_order_id, timestamp
 
     def _generate_client_order_id(self, order_id: str) -> int:
         """Generate a 32-bit client order ID from Hummingbot order ID"""
