@@ -190,10 +190,6 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
         """List of supported position modes"""
         return CONSTANTS.SUPPORTED_POSITION_MODES
 
-
-
-
-
     def get_buy_collateral_token(self, trading_pair: str) -> str:
         """Get the collateral token for buy orders"""
         trading_rule: TradingRule = self._trading_rules[trading_pair]
@@ -213,8 +209,6 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
         """Check if status update exception indicates order not found"""
         return "404" in str(status_update_exception) or "not found" in str(status_update_exception).lower()
 
-
-
     def _create_web_assistants_factory(self) -> WebAssistantsFactory:
         """Create web assistants factory with authentication"""
         return web_utils.build_api_factory(
@@ -231,9 +225,9 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
     def _create_order_book_tracker(self):
         """Create order book tracker for derivative trading"""
         from hummingbot.core.data_type.order_book_tracker import OrderBookTracker
-        
+
         data_source = self._create_order_book_data_source()
-        
+
         tracker = OrderBookTracker(
             data_source=data_source,
             trading_pairs=self._trading_pairs
@@ -329,7 +323,7 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
 
                 min_price_increment = safe_decimal(price_filter.get("tickSize"), "0.01")
                 min_notional_size = safe_decimal(price_filter.get("minPrice"), "1.0")
-                
+
                 # Extract quote asset for collateral token
                 base_symbol = market_info.get("baseSymbol", "")
                 quote_symbol = market_info.get("quoteSymbol", "")
@@ -360,7 +354,7 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
     async def _update_trading_rules(self):
         """
         Update trading rules without resetting symbol mapping.
-        
+
         CRITICAL: Unlike the base class, we don't call _initialize_trading_pair_symbols_from_exchange_info()
         here because we already initialized it in start_network() and don't want to reset the mapping.
         """
@@ -368,14 +362,12 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
             # Get trading rules data using same endpoint as symbol mapping
             exchange_info = await self._make_trading_pairs_request()
             trading_rules_list = await self._format_trading_rules(exchange_info)
-            
+
             # Clear and update trading rules
             self._trading_rules.clear()
             for trading_rule in trading_rules_list:
                 self._trading_rules[trading_rule.trading_pair] = trading_rule
-                
 
-            
         except Exception as e:
             self.logger().error(f"Error updating trading rules: {e}", exc_info=True)
             # Don't raise exception to avoid blocking connector initialization
@@ -468,7 +460,7 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
 
     async def _process_position_event(self, event_data: Dict[str, Any]):
         """Process position update events from user stream"""
-        try:            
+        try:
             # Extract position information from Backpack event
             # Reference format from user stream data source:
             # {
@@ -507,14 +499,14 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
             if position_side is not None and amount != 0:
                 # Use configured leverage (5x) for now - IMF calculation was causing issues
                 leverage = Decimal("5")
-                
-                # Create or update position
+
+                # Create or update position - preserve sign for strategy compatibility
                 position = Position(
                     trading_pair=trading_pair,
                     position_side=position_side,
                     unrealized_pnl=pnl_unrealized,
                     entry_price=entry_price,
-                    amount=abs(amount),
+                    amount=amount,  # Keep negative amount for SHORT positions
                     leverage=leverage,
                 )
 
@@ -610,23 +602,23 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
             pnl_realized = Decimal(str(position_data.get("pnlRealized", "0")))
             mark_price = Decimal(str(position_data.get("markPrice", "0")))
             liquidation_price = Decimal(str(position_data.get("estLiquidationPrice", "0")))
-            
+
             # Convert symbol to trading pair
             trading_pair = web_utils.convert_from_exchange_trading_pair(symbol)
 
-            # Determine position side
+            # Determine position side and preserve sign for strategy compatibility
             if net_quantity > 0:
                 position_side = PositionSide.LONG
                 amount = net_quantity
             elif net_quantity < 0:
                 position_side = PositionSide.SHORT
-                amount = abs(net_quantity)
+                amount = net_quantity  # Keep negative amount for SHORT positions
             else:
                 # No position
                 self.set_position(trading_pair, None)
                 return
 
-            # Use configured leverage (5x) 
+            # Use configured leverage (5x)
             leverage = Decimal("5")
 
             # Create position object
@@ -663,7 +655,7 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
         """Set position mode for a trading pair"""
         try:
             # Backpack position mode setting is not yet implemented
-            # Return success to avoid error logging, but inform user via message  
+            # Return success to avoid error logging, but inform user via message
             # TODO: Implement actual position mode setting API when available
             return True, f"Position mode setting not yet implemented for Backpack (requested: {mode})"
         except Exception as e:
@@ -756,9 +748,7 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
         **kwargs,
     ) -> Tuple[str, float]:
         """Place order with position action support"""
-        
 
-        
         # Convert trading pair to exchange symbol
         symbol = web_utils.convert_to_exchange_trading_pair(trading_pair)
 
@@ -777,6 +767,10 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
 
         # Add time in force
         order_data["timeInForce"] = "GTC"  # Default to Good Till Canceled
+
+        # Add reduceOnly for position closing
+        if position_action == PositionAction.CLOSE:
+            order_data["reduceOnly"] = True
 
         # Execute request
         rest_assistant = await self._web_assistants_factory.get_rest_assistant()
@@ -813,7 +807,7 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
         error_str = str(cancelation_exception)
         # Check for Backpack-specific order not found patterns
         # Exception format: "Error executing request DELETE... Error: {"code":"INVALID_CLIENT_REQUEST","message":"Order not found"}"
-        return (CONSTANTS.ORDER_NOT_FOUND_ERROR_CODE in error_str and 
+        return (CONSTANTS.ORDER_NOT_FOUND_ERROR_CODE in error_str and
                 CONSTANTS.ORDER_NOT_FOUND_MESSAGE in error_str)
 
     async def _place_cancel(self, order_id: str, tracked_order: InFlightOrder):
@@ -832,7 +826,7 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
             error_str = str(e)
             # Check if this is a "Order not found" error in the exception message
             if (CONSTANTS.ORDER_NOT_FOUND_ERROR_CODE in error_str and
-                CONSTANTS.ORDER_NOT_FOUND_MESSAGE in error_str):
+                    CONSTANTS.ORDER_NOT_FOUND_MESSAGE in error_str):
                 self.logger().debug(f"The order {order_id} does not exist on Backpack Perpetuals. "
                                     f"No cancelation needed.")
                 await self._order_tracker.process_order_not_found(order_id)
@@ -907,13 +901,13 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
             throttler_limit_id=CONSTANTS.CAPITAL_PATH_URL,
             is_auth_required=True,
         )
-        
+
         return response
 
     async def _update_balances(self):
         """
         Update account balances by fetching from Backpack's /capital endpoint.
-        
+
         Expected response format:
         {
             "USDC": {"available": "46.157501635", "locked": "0", "staked": "0"},
@@ -1027,7 +1021,7 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
     async def exchange_symbol_associated_to_pair(self, trading_pair: str) -> str:
         """
         Get exchange symbol for trading pair with backup fallback.
-        
+
         If the main symbol map is empty (due to reset), use the backup.
         """
         try:
@@ -1051,16 +1045,14 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
         """
         # CRITICAL: Initialize trading pair symbol mapping FIRST
         await self._initialize_trading_pair_symbol_map()
-        
+
         # Verify symbol mapping is ready before proceeding
         if not self.trading_pair_symbol_map_ready():
             raise ValueError("Trading pair symbol mapping not initialized properly")
-            
 
-        
         # Then initialize trading rules (depends on symbol mapping)
         await self._update_trading_rules()
-        
+
         # Finally start the parent network (creates order book tracker)
         await super().start_network()
 
@@ -1123,22 +1115,22 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
     def _initialize_trading_pair_symbols_from_exchange_info(self, exchange_info: List[Dict[str, Any]]):
         """Initialize trading pair symbols from exchange info - simplified like Binance"""
         mapping = bidict()
-        
+
         # Filter for valid perpetual markets and add ALL to mapping (no filtering by _trading_pairs)
         for market_info in filter(self._is_valid_perpetual_market, exchange_info):
             exchange_symbol = market_info["symbol"]  # e.g., "SOL_USDC_PERP"
             base = market_info["baseSymbol"]  # e.g., "SOL"
             quote = market_info["quoteSymbol"]  # e.g., "USDC"
             trading_pair = f"{base}-{quote}"  # e.g., "SOL-USDC"
-            
+
             # Add to mapping without any filtering (like Binance Perpetual)
             mapping[exchange_symbol] = trading_pair
-            
+
         print(f"🔧 DEBUG: Created mapping with {len(mapping)} perpetual pairs")  # TODO: Remove after debugging
         if len(mapping) > 0:
             sample_items = dict(list(mapping.items())[:3])
             print(f"🔧 DEBUG: Sample mappings: {sample_items}")  # TODO: Remove after debugging
-        
+
         # Set the mapping using base class method (just like Backpack spot)
         self._set_trading_pair_symbol_map(mapping)
         self._backup_symbol_map = mapping.copy()  # Create backup
@@ -1147,31 +1139,31 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
         """Check if market info represents a valid perpetual market"""
         try:
             symbol = market_info.get("symbol", "unknown")
-            
+
             # Must have all required fields
             required_fields = ["symbol", "baseSymbol", "quoteSymbol", "marketType", "orderBookState"]
             if not all(field in market_info for field in required_fields):
                 missing_fields = [f for f in required_fields if f not in market_info]
                 print(f"🔧 DEBUG: Market {symbol} missing fields: {missing_fields}")  # TODO: Remove after debugging
                 return False
-            
+
             # Must be a perpetual market
             market_type = market_info.get("marketType", "")
             if market_type.upper() not in ["PERP", "PERPETUAL", "FUTURE"]:
                 # print(f"🔧 DEBUG: Market {symbol} has invalid market type: '{market_type}'")  # TODO: Remove after debugging
                 return False
-                
+
             # Must have _PERP suffix
             if not symbol.endswith("_PERP"):
                 print(f"🔧 DEBUG: Market {symbol} does not end with _PERP")  # TODO: Remove after debugging
                 return False
-                
+
             # Must be open for trading
             order_book_state = market_info.get("orderBookState", "")
             if order_book_state.upper() != "OPEN":
                 print(f"🔧 DEBUG: Market {symbol} is not open: '{order_book_state}'")  # TODO: Remove after debugging
                 return False
-                
+
             # print(f"🔧 DEBUG: Market {symbol} is VALID perpetual market")  # TODO: Remove after debugging
             return True
         except Exception as e:
