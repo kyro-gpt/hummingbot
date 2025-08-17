@@ -45,6 +45,7 @@ def start(self):
         custom_api_update_interval = c_map.get("custom_api_update_interval").value
         order_refresh_tolerance_pct = c_map.get("order_refresh_tolerance_pct").value / Decimal('100')
         order_override = c_map.get("order_override").value
+        manage_position_threshold = c_map.get("manage_position_threshold").value
 
         trading_pair: str = raw_trading_pair
         base, quote = trading_pair.split("-")
@@ -100,6 +101,7 @@ def start(self):
             minimum_spread=minimum_spread,
             hb_app_notification=True,
             order_override=order_override,
+            manage_position_threshold=manage_position_threshold,
         )
     except Exception as e:
         self.notify(str(e))

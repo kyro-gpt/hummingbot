@@ -321,4 +321,11 @@ perpetual_market_making_config_map = {
                   required_if=lambda: False,
                   default=None,
                   type_str="json"),
+    "manage_position_threshold":
+        ConfigVar(key="manage_position_threshold",
+                  prompt="What is the threshold for managing positions? Enter 0.01 for 0.01 BTC >>> ",
+                  type_str="decimal",
+                  validator=lambda v: validate_decimal(v, min_value=Decimal("0"), inclusive=False),
+                  default=Decimal("0"),
+                  prompt_on_new=True),
 }

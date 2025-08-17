@@ -113,3 +113,8 @@ custom_api_update_interval: null
 #   order_3: [sell, 0.1, 500]
 # Please make sure there is a space between : and [
 order_override: null
+
+# Threshold for managing positions. When total position size exceeds this threshold,
+# the bot will manage positions instead of creating new orders.
+# Enter 0.01 for 0.01 BTC, 0.1 for 0.1 BTC, etc.
+manage_position_threshold: null

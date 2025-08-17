@@ -79,6 +79,7 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
                     minimum_spread: Decimal = Decimal(0),
                     hb_app_notification: bool = False,
                     order_override: Dict[str, List[str]] = {},
+                    manage_position_threshold: Decimal = Decimal(0),
                     ):
 
         if price_ceiling != s_decimal_neg_one and price_ceiling < price_floor:
@@ -134,6 +135,7 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
 
         self._position_mode_ready = False
         self._position_mode_not_ready_counter = 0
+        self._manage_position_threshold = manage_position_threshold
 
     def all_markets_ready(self):
         return all([market.ready for market in self.active_markets])
@@ -482,7 +484,9 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
                     self.logger().warning("WARNING: Some markets are not connected or are down at the moment. Market "
                                           "making may be dangerous when markets or networks are unstable.")
 
-            if len(session_positions) == 0:
+            # only create orders if the position size is smaller than the threshold
+            # otherwise, we will manage positions
+            if not self.should_manage_positions(session_positions):
                 self.logger().info(f"🔍 INITIATING ORDER CREATION")
                 self._exit_orders = dict()  # Empty list of exit order at this point to reduce size
                 proposal = None
@@ -528,6 +532,16 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
         self.logger().info(f"🔍 STOP LOSS PROPOSALS: {proposals}, {session_positions}")
         if proposals is not None:
             self.execute_orders_proposal(proposals, PositionAction.CLOSE)
+
+    def should_manage_positions(self, session_positions: List[Position]) -> bool:
+        if len(session_positions) == 0:
+            return False
+
+        total_position_size = sum(abs(position.amount) for position in session_positions)
+        if total_position_size > self._manage_position_threshold:
+            return True
+
+        return False
 
     def profit_taking_proposal(self, mode: PositionMode, active_positions: List) -> Proposal:
 
