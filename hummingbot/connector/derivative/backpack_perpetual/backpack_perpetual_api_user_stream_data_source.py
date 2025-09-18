@@ -141,11 +141,13 @@ class BackpackPerpetualAPIUserStreamDataSource(UserStreamTrackerDataSource):
                     f"account.positionUpdate.{symbol}",  # Symbol-specific position updates
                 ])
 
-            # Create subscription message (exact same format as working spot connector)
+            # Create subscription message with authentication parameters
             subscription_message = {
                 "method": "SUBSCRIBE",
                 "params": streams,
-                "signature": auth_params["signature"]  # This is [verifying_key, signature, timestamp, window]
+                "signature": auth_params["signature"],
+                "timestamp": auth_params["timestamp"],
+                "window": auth_params["window"]
             }
 
             subscribe_request: WSJSONRequest = WSJSONRequest(payload=subscription_message)

@@ -685,10 +685,11 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
                 payment_data = response[0]
                 timestamp_str = payment_data.get("intervalEndTimestamp", "0")
                 if timestamp_str and timestamp_str != "0":
-                    # Parse ISO timestamp string to unix timestamp
+                    # Parse ISO timestamp string to unix timestamp in milliseconds
+                    # Following the pattern of other derivative connectors (Bitget, KuCoin, etc.)
                     from datetime import datetime
                     dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                    timestamp = int(dt.timestamp())
+                    timestamp = int(dt.timestamp() * 1000)  # Convert to milliseconds
                 else:
                     timestamp = 0
                 funding_rate = Decimal(str(payment_data.get("fundingRate", "0")))

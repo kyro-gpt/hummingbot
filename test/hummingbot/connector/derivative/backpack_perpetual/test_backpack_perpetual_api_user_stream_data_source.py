@@ -256,10 +256,10 @@ class BackpackPerpetualAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCa
         self.assertEqual("SUBSCRIBE", sent_payload["method"])
         self.assertIn("account.orderUpdate", sent_payload["params"])
         self.assertIn("account.positionUpdate", sent_payload["params"])
-        self.assertIn("SOL_USDC_PERP.orderUpdate", sent_payload["params"])
-        self.assertIn("SOL_USDC_PERP.positionUpdate", sent_payload["params"])
-        self.assertIn("ETH_USDT_PERP.orderUpdate", sent_payload["params"])
-        self.assertIn("ETH_USDT_PERP.positionUpdate", sent_payload["params"])
+        self.assertIn("account.orderUpdate.SOL_USDC_PERP", sent_payload["params"])
+        self.assertIn("account.positionUpdate.SOL_USDC_PERP", sent_payload["params"])
+        self.assertIn("account.orderUpdate.ETH_USDT_PERP", sent_payload["params"])
+        self.assertIn("account.positionUpdate.ETH_USDT_PERP", sent_payload["params"])
 
         # Verify authentication parameters
         self.assertEqual([1, 2, 3, 4], sent_payload["signature"])
