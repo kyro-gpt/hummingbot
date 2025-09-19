@@ -1,0 +1,35 @@
+---
+alwaysApply: true
+description: Hummingbot connector development workflow and critical guidelines
+---
+
+# Hummingbot Connector Development Rules
+
+## CRITICAL WORKFLOW RULES
+- **NEVER** modify high level design without confirmation
+- **ALWAYS** track all planning at `./local_dev/plans/{exchange}`
+- **ALWAYS** stop and perform testing before marking milestones done
+- **ALWAYS** use `conda activate hummingbot` env for running tests
+- **NEVER** make API shape assumptions - stop and ask for clarification
+  - Check `./local_dev/docs/{exchange}/openapi.json` for API specs
+  - Check `./local_dev/api-examples/{exchange}/` for API examples
+  - Check `./local_dev/api-examples/` for some SDK and code samples and also docs about APIs
+- For derivatives: borrow what we can from spot trading, like auth don't reinvent everything
+
+## Development Workflow
+1. **API Analysis**: Check [api_checklist.csv](mdc:local_dev/docs/api_checklist.csv) compatibility first
+2. **Test Planning**: Design test strategy for REST and WebSocket before coding
+3. **TDD Implementation**: Write tests first, then implement features
+4. **Milestone Testing**: Stop and test before moving to next phase
+
+## Project Structure
+- Spot: `hummingbot/connector/exchange/{connector_name}/`
+- Perpetual: `hummingbot/connector/derivative/{connector_name}/`
+- Tests: `test/hummingbot/connector/exchange/{connector_name}/`
+- Reference: Binance (spot & derivatives) for CEX, Hyperliquid for exchange on chain
+
+## Documentation References
+- [Spot Guide](mdc:local_dev/docs/spot_connector.md)
+- [Perpetual Guide](mdc:local_dev/docs/perp_connector.md)
+- [API Checklist](mdc:local_dev/docs/api_checklist.csv)
+- Plans: `./local_dev/plans/{connector_name}/`
