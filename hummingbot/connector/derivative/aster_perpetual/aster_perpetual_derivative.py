@@ -584,3 +584,15 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
                 raise
             except Exception:
                 self.logger().exception("Unexpected error in user stream listener.")
+
+    async def _get_last_traded_price(self, trading_pair: str) -> float:
+        """
+        Get last traded price for trading pair - adapted from Binance for Aster v3 API
+        """
+        exchange_symbol = await self.exchange_symbol_associated_to_pair(trading_pair=trading_pair)
+        params = {"symbol": exchange_symbol}
+        response = await self._api_get(
+            path_url=CONSTANTS.TICKER_PRICE_CHANGE_URL,
+            params=params)
+        price = float(response["lastPrice"])
+        return price
