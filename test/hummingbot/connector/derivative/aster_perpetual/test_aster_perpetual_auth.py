@@ -10,21 +10,26 @@ from hummingbot.core.web_assistant.connections.data_types import RESTMethod, RES
 
 class AsterPerpetualAuthUnitTests(unittest.TestCase):
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        super().setUpClass()
-        cls.ev_loop = asyncio.get_event_loop()
-
+    def setUp(self) -> None:
+        super().setUp()
+        # Create fresh event loop for each test
+        self.ev_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.ev_loop)
+        
         # Test credentials from Aster example
-        cls.user_wallet = '0x63DD5aCC6b1aa0f563956C0e534DD30B6dcF7C4e'  # noqa: mock
-        cls.signer_wallet = '0x21cF8Ae13Bb72632562c6Fff438652Ba1a151bb0'  # noqa: mock
-        cls.private_key = "0x4fd0a42218f3eae43a6ce26d22544e986139a01e5b34a62db53757ffca81bae1"  # noqa: mock
-
-        cls.auth = AsterPerpetualAuth(
-            user_wallet=cls.user_wallet,
-            signer_wallet=cls.signer_wallet,
-            private_key=cls.private_key
+        self.user_wallet = '0x63DD5aCC6b1aa0f563956C0e534DD30B6dcF7C4e'  # noqa: mock
+        self.signer_wallet = '0x21cF8Ae13Bb72632562c6Fff438652Ba1a151bb0'  # noqa: mock
+        self.private_key = "0x4fd0a42218f3eae43a6ce26d22544e986139a01e5b34a62db53757ffca81bae1"  # noqa: mock
+        
+        self.auth = AsterPerpetualAuth(
+            user_wallet=self.user_wallet,
+            signer_wallet=self.signer_wallet,
+            private_key=self.private_key
         )
+
+    def tearDown(self) -> None:
+        self.ev_loop.close()
+        super().tearDown()
 
     def async_run_with_timeout(self, coroutine: Awaitable, timeout: float = 1):
         ret = self.ev_loop.run_until_complete(asyncio.wait_for(coroutine, timeout))

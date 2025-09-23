@@ -1,7 +1,9 @@
 import asyncio  # noqa: F401
 import time
 from decimal import Decimal
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+from bidict import bidict
 
 from hummingbot.connector.constants import s_decimal_NaN
 from hummingbot.connector.derivative.aster_perpetual import (
@@ -25,7 +27,7 @@ from hummingbot.core.data_type.in_flight_order import InFlightOrder, OrderUpdate
 from hummingbot.core.data_type.order_book_tracker_data_source import OrderBookTrackerDataSource
 from hummingbot.core.data_type.trade_fee import TokenAmount, TradeFeeBase
 from hummingbot.core.data_type.user_stream_tracker_data_source import UserStreamTrackerDataSource
-from hummingbot.core.utils.async_utils import safe_gather  # noqa: F401
+from hummingbot.core.utils.async_utils import safe_gather
 from hummingbot.core.utils.estimate_fee import build_trade_fee
 from hummingbot.core.web_assistant.web_assistants_factory import WebAssistantsFactory
 
@@ -413,3 +415,174 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
             return True, ""
         except Exception as e:
             return False, str(e)
+
+    # === Additional abstract methods from base classes ===
+
+    async def _all_trade_updates_for_order(self, order: InFlightOrder) -> List[TradeUpdate]:
+        """
+        Get all trade updates for an order - adapted from Binance for Aster v3 API
+        """
+        trade_updates = []
+        try:
+            exchange_order_id = await order.get_exchange_order_id()
+            trading_pair = await self.exchange_symbol_associated_to_pair(trading_pair=order.trading_pair)
+            all_fills_response = await self._api_get(
+                path_url=CONSTANTS.ACCOUNT_TRADE_LIST_URL,
+                params={
+                    "symbol": trading_pair,
+                },
+                is_auth_required=True)
+
+            for trade in all_fills_response:
+                order_id = str(trade.get("orderId"))
+                if order_id == exchange_order_id:
+                    position_side = trade["positionSide"]
+                    position_action = (PositionAction.OPEN
+                                       if (order.trade_type is TradeType.BUY and position_side == "LONG"
+                                           or order.trade_type is TradeType.SELL and position_side == "SHORT")
+                                       else PositionAction.CLOSE)
+                    fee = TradeFeeBase.new_perpetual_fee(
+                        fee_schema=self.trade_fee_schema(),
+                        position_action=position_action,
+                        percent_token=trade["commissionAsset"],
+                        flat_fees=[TokenAmount(amount=Decimal(trade["commission"]), token=trade["commissionAsset"])]
+                    )
+                    trade_update: TradeUpdate = TradeUpdate(
+                        trade_id=str(trade["id"]),
+                        client_order_id=order.client_order_id,
+                        exchange_order_id=trade["orderId"],
+                        trading_pair=order.trading_pair,
+                        fill_timestamp=trade["time"] * 1e-3,
+                        fill_price=Decimal(trade["price"]),
+                        fill_base_amount=Decimal(trade["qty"]),
+                        fill_quote_amount=Decimal(trade["quoteQty"]),
+                        fee=fee,
+                    )
+                    trade_updates.append(trade_update)
+
+        except asyncio.TimeoutError:
+            raise IOError(f"Skipped order update with order fills for {order.client_order_id} "
+                          "- waiting for exchange order id.")
+
+        return trade_updates
+
+    async def _format_trading_rules(self, exchange_info_dict: Dict[str, Any]) -> Dict[str, TradingRule]:
+        """
+        Format trading rules from exchange info - adapted from Binance for Aster v3 API
+        """
+        trading_rules = {}
+        if "symbols" in exchange_info_dict:
+            for rule in exchange_info_dict["symbols"]:
+                if web_utils.is_exchange_information_valid(rule):
+                    trading_rules[rule["symbol"]] = TradingRule(
+                        trading_pair=await self.trading_pair_associated_to_exchange_symbol(symbol=rule["symbol"]),
+                        min_order_size=Decimal("0"),  # Will be updated from filters
+                        max_order_size=Decimal("0"),  # Will be updated from filters
+                        has_margin=False,
+                        has_derivative=True,
+                    )
+        return trading_rules
+
+    async def _initialize_trading_pair_symbols_from_exchange_info(self, exchange_info: Dict[str, Any]):
+        """
+        Initialize trading pair symbols from exchange info - adapted from Binance
+        """
+        mapping = bidict()
+        for symbol_data in filter(web_utils.is_exchange_information_valid, exchange_info["symbols"]):
+            mapping[symbol_data["symbol"]] = combine_to_hb_trading_pair(
+                base=symbol_data["baseAsset"], quote=symbol_data["quoteAsset"]
+            )
+        self._set_trading_pair_symbol_map(mapping)
+
+    async def _request_order_status(self, tracked_order: InFlightOrder) -> OrderUpdate:
+        """
+        Request order status from exchange - adapted from Binance for Aster v3 API
+        """
+        trading_pair = await self.exchange_symbol_associated_to_pair(trading_pair=tracked_order.trading_pair)
+        order_update = await self._api_get(
+            path_url=CONSTANTS.ORDER_URL,
+            params={
+                "symbol": trading_pair,
+                "origClientOrderId": tracked_order.client_order_id,
+            },
+            is_auth_required=True
+        )
+
+        order_state = CONSTANTS.ORDER_STATE[order_update["status"]]
+
+        return OrderUpdate(
+            client_order_id=tracked_order.client_order_id,
+            exchange_order_id=str(order_update["orderId"]),
+            trading_pair=tracked_order.trading_pair,
+            update_timestamp=order_update["updateTime"] * 1e-3,
+            new_state=order_state,
+        )
+
+    async def _update_balances(self):
+        """
+        Update account balances - adapted from Binance for Aster v3 API
+        """
+        local_asset_names = set(self._account_balances.keys())
+        remote_asset_names = set()
+
+        account_info = await self._api_get(
+            path_url=CONSTANTS.ACCOUNT_INFO_URL,
+            is_auth_required=True)
+
+        for balance_entry in account_info["assets"]:
+            asset_name = balance_entry["asset"]
+            free_balance = Decimal(balance_entry["availableBalance"])
+            total_balance = Decimal(balance_entry["walletBalance"])
+            self._account_available_balances[asset_name] = free_balance
+            self._account_balances[asset_name] = total_balance
+            remote_asset_names.add(asset_name)
+
+        asset_names_to_remove = local_asset_names.difference(remote_asset_names)
+        for asset_name in asset_names_to_remove:
+            del self._account_available_balances[asset_name]
+            del self._account_balances[asset_name]
+
+    async def _update_trading_fees(self):
+        """
+        Update trading fees information from the exchange
+        """
+        pass  # Same as Binance - not implemented
+
+    async def _status_polling_loop_fetch_updates(self):
+        """
+        Called by status polling loop to fetch updates - same as Binance
+        """
+        await safe_gather(
+            self._update_order_fills_from_trades(),
+            self._update_order_status(),
+            self._update_balances(),
+            self._update_positions(),
+        )
+
+    async def _user_stream_event_listener(self):
+        """
+        Listen for user stream events - adapted from Binance pattern
+        """
+        async for stream_message in self._iter_user_event_queue():
+            try:
+                event_type = stream_message.get("e")
+                if event_type == "ORDER_TRADE_UPDATE":
+                    order_message = stream_message.get("o")
+                    client_order_id = order_message.get("c")
+                    tracked_order = self._order_tracker.fetch_order(client_order_id=client_order_id)
+                    if tracked_order is not None:
+                        order_update = OrderUpdate(
+                            trading_pair=tracked_order.trading_pair,
+                            update_timestamp=stream_message["E"] * 1e-3,
+                            new_state=CONSTANTS.ORDER_STATE[order_message["X"]],
+                            client_order_id=client_order_id,
+                            exchange_order_id=str(order_message["i"]),
+                        )
+                        self._order_tracker.process_order_update(order_update)
+                elif event_type == "ACCOUNT_UPDATE":
+                    # Handle balance and position updates
+                    pass
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.logger().exception("Unexpected error in user stream listener.")

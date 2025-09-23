@@ -1,0 +1,211 @@
+import asyncio
+import re
+import unittest
+from typing import Optional
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import ujson
+from aioresponses.core import aioresponses
+
+import hummingbot.connector.derivative.aster_perpetual.aster_perpetual_constants as CONSTANTS
+from hummingbot.client.config.client_config_map import ClientConfigMap
+from hummingbot.client.config.config_helpers import ClientConfigAdapter
+from hummingbot.connector.derivative.aster_perpetual import aster_perpetual_web_utils as web_utils
+from hummingbot.connector.derivative.aster_perpetual.aster_perpetual_api_user_stream_data_source import (
+    AsterPerpetualUserStreamDataSource,
+)
+from hummingbot.connector.derivative.aster_perpetual.aster_perpetual_auth import AsterPerpetualAuth
+from hummingbot.connector.derivative.aster_perpetual.aster_perpetual_derivative import AsterPerpetualDerivative
+from hummingbot.connector.test_support.network_mocking_assistant import NetworkMockingAssistant
+from hummingbot.connector.time_synchronizer import TimeSynchronizer
+from hummingbot.core.api_throttler.async_throttler import AsyncThrottler
+
+
+class AsterPerpetualUserStreamDataSourceUnitTests(unittest.TestCase):
+    # Basic test level for logs
+    level = 0
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.base_asset = "BTC"
+        cls.quote_asset = "USDT"
+        cls.trading_pair = f"{cls.base_asset}-{cls.quote_asset}"
+        cls.ex_trading_pair = cls.base_asset + cls.quote_asset
+        cls.domain = CONSTANTS.TESTNET_DOMAIN
+
+        # Test Web3 credentials from Aster example
+        cls.user_wallet = '0x63DD5aCC6b1aa0f563956C0e534DD30B6dcF7C4e'  # noqa: mock
+        cls.signer_wallet = '0x21cF8Ae13Bb72632562c6Fff438652Ba1a151bb0'  # noqa: mock
+        cls.private_key = "0x4fd0a42218f3eae43a6ce26d22544e986139a01e5b34a62db53757ffca81bae1"  # noqa: mock
+        cls.listen_key = "TEST_LISTEN_KEY"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.log_records = []
+        self.listening_task: Optional[asyncio.Task] = None
+        self.ev_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.ev_loop)
+
+        self.emulated_time = 1640001112.223
+        client_config_map = ClientConfigAdapter(ClientConfigMap())
+
+        # Create mock connector (minimal for testing)
+        self.connector = MagicMock()
+        self.connector.domain = self.domain
+
+        self.auth = AsterPerpetualAuth(
+            user_wallet=self.user_wallet,
+            signer_wallet=self.signer_wallet,
+            private_key=self.private_key
+        )
+
+        self.throttler = AsyncThrottler(rate_limits=CONSTANTS.RATE_LIMITS)
+        self.time_synchronizer = TimeSynchronizer()
+        self.time_synchronizer.add_time_offset_ms_sample(0)
+        api_factory = web_utils.build_api_factory(auth=self.auth)
+
+        self.data_source = AsterPerpetualUserStreamDataSource(
+            auth=self.auth,
+            domain=self.domain,
+            api_factory=api_factory,
+            connector=self.connector,
+        )
+
+        self.data_source.logger().setLevel(1)
+        self.data_source.logger().addHandler(self)
+
+        self.mock_done_event = asyncio.Event()
+        self.resume_test_event = asyncio.Event()
+
+    def tearDown(self) -> None:
+        self.listening_task and self.listening_task.cancel()
+        self.ev_loop.close()
+        super().tearDown()
+
+    def handle(self, record):
+        self.log_records.append(record)
+
+    def _is_logged(self, log_level: str, message: str) -> bool:
+        return any(record.levelname == log_level and record.getMessage() == message for record in self.log_records)
+
+    def async_run_with_timeout(self, coroutine, timeout: float = 1):
+        return self.ev_loop.run_until_complete(asyncio.wait_for(coroutine, timeout))
+
+    def test_data_source_initialization(self):
+        """Test basic data source initialization"""
+        self.assertEqual(self.data_source._domain, self.domain)
+        self.assertEqual(self.data_source._auth, self.auth)
+        self.assertEqual(self.data_source._connector, self.connector)
+        self.assertIsNone(self.data_source._current_listen_key)
+        self.assertIsNone(self.data_source._manage_listen_key_task)
+
+    def test_data_source_constants(self):
+        """Test that data source has proper constants configured"""
+        self.assertEqual(self.data_source.LISTEN_KEY_KEEP_ALIVE_INTERVAL, 1800)
+        self.assertEqual(self.data_source.HEARTBEAT_TIME_INTERVAL, 30.0)
+        self.assertEqual(self.data_source.LISTEN_KEY_RETRY_INTERVAL, 5.0)
+        self.assertEqual(self.data_source.MAX_RETRIES, 3)
+
+    @aioresponses()
+    def test_get_listen_key_successful(self, mock_api):
+        """Test successful listen key retrieval"""
+        url = web_utils.private_rest_url(CONSTANTS.ASTER_PERPETUAL_USER_STREAM_ENDPOINT, domain=self.domain)
+        regex_url = re.compile(f"^{url}".replace(".", r"\.").replace("?", r"\?"))
+
+        mock_response = {"listenKey": self.listen_key}
+        mock_api.post(regex_url, body=ujson.dumps(mock_response))
+
+        result = self.async_run_with_timeout(self.data_source._get_listen_key())
+        self.assertEqual(result, self.listen_key)
+
+    @aioresponses()
+    def test_get_listen_key_exception_retry(self, mock_api):
+        """Test listen key retrieval with retries on failure"""
+        url = web_utils.private_rest_url(CONSTANTS.ASTER_PERPETUAL_USER_STREAM_ENDPOINT, domain=self.domain)
+        regex_url = re.compile(f"^{url}".replace(".", r"\.").replace("?", r"\?"))
+
+        # First call fails, second succeeds
+        mock_api.post(regex_url, status=500)
+        mock_api.post(regex_url, body=ujson.dumps({"listenKey": self.listen_key}))
+
+        with patch('asyncio.sleep', new_callable=AsyncMock):
+            result = self.async_run_with_timeout(self.data_source._get_listen_key())
+
+        self.assertEqual(result, self.listen_key)
+        # Check that warning was logged (partial message match)
+        warning_logged = any("Failed to get listen key (attempt 1/3)" in record.getMessage()
+                             for record in self.log_records if record.levelname == "WARNING")
+        self.assertTrue(warning_logged)
+
+    @aioresponses()
+    def test_ping_listen_key_successful(self, mock_api):
+        """Test successful listen key ping"""
+        url = web_utils.private_rest_url(CONSTANTS.ASTER_PERPETUAL_USER_STREAM_ENDPOINT, domain=self.domain)
+        regex_url = re.compile(f"^{url}".replace(".", r"\.").replace("?", r"\?"))
+
+        mock_api.put(regex_url, status=200)
+
+        result = self.async_run_with_timeout(self.data_source._ping_listen_key(self.listen_key))
+        self.assertTrue(result)
+
+    @aioresponses()
+    def test_ping_listen_key_failure(self, mock_api):
+        """Test listen key ping failure"""
+        url = web_utils.private_rest_url(CONSTANTS.ASTER_PERPETUAL_USER_STREAM_ENDPOINT, domain=self.domain)
+        regex_url = re.compile(f"^{url}".replace(".", r"\.").replace("?", r"\?"))
+
+        mock_api.put(regex_url, status=400)
+
+        result = self.async_run_with_timeout(self.data_source._ping_listen_key(self.listen_key))
+        self.assertFalse(result)
+        # Check that warning was logged (partial message match)
+        warning_logged = any("Failed to ping listen key:" in record.getMessage()
+                             for record in self.log_records if record.levelname == "WARNING")
+        self.assertTrue(warning_logged)
+
+    def test_subscribe_channels_pass_through(self):
+        """Test that channel subscription is pass-through (no subscription needed)"""
+        mock_ws = AsyncMock()
+
+        # This should not raise any exception and should pass through
+        result = self.async_run_with_timeout(self.data_source._subscribe_channels(mock_ws))
+        self.assertIsNone(result)
+
+    def test_on_user_stream_interruption(self):
+        """Test user stream interruption handling"""
+        # Set up initial state
+        self.data_source._current_listen_key = "test_key"
+        self.data_source._listen_key_initialized_event.set()
+        mock_task = MagicMock()
+        mock_task.done.return_value = False
+        self.data_source._manage_listen_key_task = mock_task
+
+        # Call interruption handler
+        self.async_run_with_timeout(self.data_source._on_user_stream_interruption(None))
+
+        # Verify state was reset
+        self.assertIsNone(self.data_source._current_listen_key)
+        self.assertFalse(self.data_source._listen_key_initialized_event.is_set())
+        mock_task.cancel.assert_called_once()
+
+    # TODO: Complex integration tests to be implemented later
+    def test_manage_listen_key_task_loop_TODO(self):
+        """TODO: Test listen key management task loop - requires complex async mocking"""
+        self.skipTest("TODO: Implement complex listen key task loop testing")
+
+    def test_connected_websocket_assistant_TODO(self):
+        """TODO: Test WebSocket connection with listen key - requires complex mocking"""
+        self.skipTest("TODO: Implement WebSocket connection testing")
+
+    def test_listen_for_user_stream_TODO(self):
+        """TODO: Test full user stream listening - requires extensive mocking"""
+        self.skipTest("TODO: Implement full user stream testing")
+
+    def test_ensure_listen_key_task_running_TODO(self):
+        """TODO: Test listen key task management - requires async task testing"""
+        self.skipTest("TODO: Implement listen key task management testing")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -13,11 +13,16 @@ from hummingbot.core.web_assistant.web_assistants_factory import WebAssistantsFa
 
 class AsterPerpetualWebUtilsUnitTests(unittest.TestCase):
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        super().setUpClass()
-        cls.ev_loop = asyncio.get_event_loop()
-        cls.pre_processor = AsterPerpetualRESTPreProcessor()
+    def setUp(self) -> None:
+        super().setUp()
+        # Create fresh event loop for each test
+        self.ev_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.ev_loop)
+        self.pre_processor = AsterPerpetualRESTPreProcessor()
+
+    def tearDown(self) -> None:
+        self.ev_loop.close()
+        super().tearDown()
 
     def async_run_with_timeout(self, coroutine: Awaitable, timeout: float = 1):
         ret = self.ev_loop.run_until_complete(asyncio.wait_for(coroutine, timeout))
