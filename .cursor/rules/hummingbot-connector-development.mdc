@@ -33,3 +33,7 @@ description: Hummingbot connector development workflow and critical guidelines
 - [Perpetual Guide](mdc:local_dev/docs/perp_connector.md)
 - [API Checklist](mdc:local_dev/docs/api_checklist.csv)
 - Plans: `./local_dev/plans/{connector_name}/`
+
+## Test Guidance
+- NEVER shortcut source code to make tests pass, e.g. remove branch or hardcode logic
+- Run `conda activate hummingbot` before triggering tests
