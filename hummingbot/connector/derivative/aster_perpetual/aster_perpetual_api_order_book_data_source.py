@@ -174,7 +174,13 @@ class AsterPerpetualAPIOrderBookDataSource(PerpetualAPIOrderBookDataSource):
             rate=Decimal(funding_data["r"]),
         )
 
-        funding_info_update: FundingInfoUpdate = FundingInfoUpdate(trading_pair=trading_pair, funding_info=funding_info)
+        funding_info_update: FundingInfoUpdate = FundingInfoUpdate(
+            trading_pair=trading_pair,
+            index_price=funding_info.index_price,
+            mark_price=funding_info.mark_price,
+            next_funding_utc_timestamp=funding_info.next_funding_utc_timestamp,
+            rate=funding_info.rate,
+        )
 
         message_queue.put_nowait(funding_info_update)
 
