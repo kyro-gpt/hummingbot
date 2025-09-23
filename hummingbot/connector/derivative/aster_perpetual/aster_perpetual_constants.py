@@ -71,10 +71,23 @@ REQUEST_WEIGHT = "REQUEST_WEIGHT"
 ORDERS_1MIN = "ORDERS_1MIN"
 ORDERS_1SEC = "ORDERS_1SEC"
 
+# WebSocket Stream IDs and Configuration
 DIFF_STREAM_ID = 1
 TRADE_STREAM_ID = 2
 FUNDING_INFO_STREAM_ID = 3
 HEARTBEAT_TIME_INTERVAL = 30.0
+
+# WebSocket Channels - Optimized for Aster
+# NOTE: Using @depth@100ms for 2.5x faster updates than Binance's default @depth (250ms)
+# ASTER OPTIONS: "@depth" (250ms), "@depth@500ms" (500ms), "@depth@100ms" (100ms)
+# BINANCE USES: "@depth" (250ms default)
+#
+# FALLBACK INSTRUCTIONS: If rate limiting issues occur:
+# 1. Change line below: WS_DEPTH_CHANNEL = "@depth"  # Revert to Binance default
+# 2. Update subscription logs in order book data source
+WS_DEPTH_CHANNEL = "@depth@100ms"  # Current: 100ms (2.5x faster than Binance)
+WS_TRADE_CHANNEL = "@aggTrade"     # Same as Binance
+WS_FUNDING_CHANNEL = "@markPrice"  # Same as Binance
 
 # Rate Limit time intervals
 ONE_HOUR = 3600
