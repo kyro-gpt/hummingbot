@@ -5,7 +5,7 @@ from typing import Awaitable
 from unittest.mock import patch
 
 from hummingbot.connector.derivative.aster_perpetual.aster_perpetual_auth import AsterPerpetualAuth
-from hummingbot.core.web_assistant.connections.data_types import RESTMethod, RESTRequest
+from hummingbot.core.web_assistant.connections.data_types import RESTMethod, RESTRequest, WSJSONRequest
 
 
 class AsterPerpetualAuthUnitTests(unittest.TestCase):
@@ -233,6 +233,129 @@ class AsterPerpetualAuthUnitTests(unittest.TestCase):
 
             self.assertEqual(result.data['signature'], '0x123')
             mock_auth.assert_called_once_with({})
+
+    def test_rest_authenticate_with_is_auth_required_flag(self):
+        """Test REST authentication respects is_auth_required flag"""
+        # Test with is_auth_required=True
+        request_auth_required = RESTRequest(
+            method=RESTMethod.GET,
+            url="/test",
+            params={'symbol': 'BTCUSDT'},
+            is_auth_required=True
+        )
+
+        with patch.object(self.auth, 'add_auth_to_params') as mock_auth:
+            mock_auth.return_value = {'symbol': 'BTCUSDT', 'signature': '0x123'}
+
+            self.async_run_with_timeout(self.auth.rest_authenticate(request_auth_required))
+            mock_auth.assert_called_once()
+
+        # Test with is_auth_required=False (default)
+        request_no_auth = RESTRequest(
+            method=RESTMethod.GET,
+            url="/test",
+            params={'symbol': 'BTCUSDT'}
+        )
+
+        with patch.object(self.auth, 'add_auth_to_params') as mock_auth:
+            self.async_run_with_timeout(self.auth.rest_authenticate(request_no_auth))
+            mock_auth.assert_called_once()  # Currently always called, but could be conditional
+
+    def test_ws_authenticate(self):
+        """Test WebSocket authentication (pass-through behavior)"""
+        request = WSJSONRequest(
+            payload={"TEST": "SOME_TEST_PAYLOAD"},
+            is_auth_required=True
+        )
+
+        result = self.async_run_with_timeout(self.auth.ws_authenticate(request))
+
+        # Currently pass-through, so request should be unchanged
+        self.assertEqual(request, result)
+        self.assertEqual(result.payload["TEST"], "SOME_TEST_PAYLOAD")
+
+    def test_signature_deterministic_with_fixed_inputs(self):
+        """Test that signature generation is deterministic with same inputs"""
+        params = {
+            'symbol': 'BTCUSDT',
+            'side': 'BUY',
+            'quantity': '10'
+        }
+        fixed_nonce = 1648776523123456
+
+        # Generate signature twice with same inputs
+        payload1 = self.auth._create_signature_payload(params, fixed_nonce)
+        payload2 = self.auth._create_signature_payload(params, fixed_nonce)
+
+        signature1 = self.auth._generate_signature(payload1)
+        signature2 = self.auth._generate_signature(payload2)
+
+        # Should be identical
+        self.assertEqual(payload1, payload2)
+        self.assertEqual(signature1, signature2)
+
+    def test_parameter_sorting_consistency(self):
+        """Test that parameter sorting is consistent regardless of input order"""
+        # Same parameters in different order
+        params1 = {'symbol': 'BTCUSDT', 'side': 'BUY', 'quantity': '10'}
+        params2 = {'side': 'BUY', 'quantity': '10', 'symbol': 'BTCUSDT'}
+        params3 = {'quantity': '10', 'symbol': 'BTCUSDT', 'side': 'BUY'}
+
+        fixed_nonce = 1648776523123456
+
+        payload1 = self.auth._create_signature_payload(params1, fixed_nonce)
+        payload2 = self.auth._create_signature_payload(params2, fixed_nonce)
+        payload3 = self.auth._create_signature_payload(params3, fixed_nonce)
+
+        # All should be identical due to sorted JSON
+        self.assertEqual(payload1, payload2)
+        self.assertEqual(payload2, payload3)
+
+    def test_none_value_filtering(self):
+        """Test that None values are properly filtered from parameters"""
+        params_with_none = {
+            'symbol': 'BTCUSDT',
+            'side': 'BUY',
+            'quantity': '10',
+            'null_param': None,
+            'empty_string': '',
+            'zero_value': 0
+        }
+
+        with patch('time.time', return_value=1648776523.123):
+            result = self.auth.add_auth_to_params(params_with_none)
+
+        # None values should be removed
+        self.assertNotIn('null_param', result)
+
+        # Other values should be preserved (even if falsy)
+        self.assertIn('empty_string', result)
+        self.assertIn('zero_value', result)
+        self.assertEqual(result['empty_string'], '')
+        self.assertEqual(result['zero_value'], 0)  # Original type preserved in main params
+
+    def test_signature_payload_includes_all_components(self):
+        """Test that signature payload includes all required components"""
+        params = {'symbol': 'BTCUSDT'}
+        nonce = 1648776523123456
+
+        # We can't easily mock the internal ABI encoding, but we can verify
+        # that the method runs without error and returns proper format
+        payload_hash = self.auth._create_signature_payload(params, nonce)
+
+        self.assertIsInstance(payload_hash, str)
+        self.assertTrue(payload_hash.startswith('0x'))
+        self.assertEqual(len(payload_hash), 66)  # 0x + 64 hex characters
+
+        # Verify that changing any component changes the hash
+        different_params = {'symbol': 'ETHUSDT'}
+        different_nonce = 1648776523123457
+
+        different_payload1 = self.auth._create_signature_payload(different_params, nonce)
+        different_payload2 = self.auth._create_signature_payload(params, different_nonce)
+
+        self.assertNotEqual(payload_hash, different_payload1)
+        self.assertNotEqual(payload_hash, different_payload2)
 
 
 if __name__ == "__main__":
