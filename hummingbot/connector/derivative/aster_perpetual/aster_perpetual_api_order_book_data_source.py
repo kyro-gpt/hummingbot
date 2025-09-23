@@ -3,7 +3,7 @@ import logging
 import time
 from collections import defaultdict
 from decimal import Decimal
-from typing import Any, Dict, List, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
 
 import hummingbot.connector.derivative.aster_perpetual.aster_perpetual_constants as CONSTANTS
 import hummingbot.connector.derivative.aster_perpetual.aster_perpetual_web_utils as web_utils
@@ -16,7 +16,8 @@ from hummingbot.core.web_assistant.web_assistants_factory import WebAssistantsFa
 from hummingbot.core.web_assistant.ws_assistant import WSAssistant
 from hummingbot.logger import HummingbotLogger
 
-# NOTE: TYPE_CHECKING import removed until aster_perpetual_derivative.py is created
+if TYPE_CHECKING:
+    from hummingbot.connector.derivative.aster_perpetual.aster_perpetual_derivative import AsterPerpetualDerivative
 
 
 class AsterPerpetualAPIOrderBookDataSource(PerpetualAPIOrderBookDataSource):
@@ -27,7 +28,7 @@ class AsterPerpetualAPIOrderBookDataSource(PerpetualAPIOrderBookDataSource):
     def __init__(
             self,
             trading_pairs: List[str],
-            connector,  # Will be AsterPerpetualDerivative when created
+            connector: 'AsterPerpetualDerivative',
             api_factory: WebAssistantsFactory,
             domain: str = CONSTANTS.DOMAIN
     ):
