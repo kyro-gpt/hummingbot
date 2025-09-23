@@ -389,13 +389,13 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
                 payment = response[0]
                 return (
                     payment["time"] / 1000.0,  # Convert to seconds
-                    Decimal(payment["income"]),
-                    Decimal(payment["asset"])
+                    Decimal(str(payment["income"])),
+                    payment["asset"]  # Asset symbol is a string, not Decimal
                 )
         except Exception as e:
             self.logger().warning(f"Failed to fetch funding payment for {trading_pair}: {e}")
 
-        return 0, Decimal("-1"), Decimal("-1")
+        return 0, Decimal("-1"), "-1"
 
     async def _trading_pair_position_mode_set(
         self, mode: PositionMode, trading_pair: str
@@ -476,10 +476,8 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
                 if web_utils.is_exchange_information_valid(rule):
                     trading_rules[rule["symbol"]] = TradingRule(
                         trading_pair=await self.trading_pair_associated_to_exchange_symbol(symbol=rule["symbol"]),
-                        min_order_size=Decimal("0"),  # Will be updated from filters
-                        max_order_size=Decimal("0"),  # Will be updated from filters
-                        has_margin=False,
-                        has_derivative=True,
+                        min_order_size=Decimal("0"),
+                        max_order_size=Decimal("0"),
                     )
         return trading_rules
 

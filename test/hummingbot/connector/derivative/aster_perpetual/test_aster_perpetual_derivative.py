@@ -1,6 +1,6 @@
 import unittest
 from decimal import Decimal
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import hummingbot.connector.derivative.aster_perpetual.aster_perpetual_constants as CONSTANTS
 from hummingbot.client.config.client_config_map import ClientConfigMap
@@ -28,8 +28,13 @@ class AsterPerpetualDerivativeUnitTests(unittest.TestCase):
 
     def setUp(self) -> None:
         super().setUp()
+        # Create fresh event loop for each test
+        import asyncio
+        self.ev_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.ev_loop)
+        
         self.client_config_map = ClientConfigAdapter(ClientConfigMap())
-
+        
         self.connector = AsterPerpetualDerivative(
             client_config_map=self.client_config_map,
             aster_perpetual_user_wallet=self.user_wallet,
@@ -39,6 +44,14 @@ class AsterPerpetualDerivativeUnitTests(unittest.TestCase):
             trading_required=False,
             domain=self.domain,
         )
+
+    def tearDown(self) -> None:
+        self.ev_loop.close()
+        super().tearDown()
+
+    def async_run_with_timeout(self, coroutine, timeout: float = 1):
+        import asyncio
+        return self.ev_loop.run_until_complete(asyncio.wait_for(coroutine, timeout))
 
     # === Property Tests ===
 
@@ -177,51 +190,265 @@ class AsterPerpetualDerivativeUnitTests(unittest.TestCase):
         self.assertIsNotNone(fee)
         # Basic validation that fee object was created
 
-    # === TODO: Complex method tests to be implemented later ===
+    # === Method implementation tests ===
+    
+    def test_status_polling_loop_fetch_updates(self):
+        """Test status polling loop calls all update methods"""
+        # Mock the update methods that actually exist in our implementation
+        with patch.object(self.connector, '_update_balances', new_callable=AsyncMock) as mock_balances, \
+             patch.object(self.connector, '_update_positions', new_callable=AsyncMock) as mock_positions:
+            
+            # Mock the methods that come from base class
+            self.connector._update_order_fills_from_trades = AsyncMock()
+            self.connector._update_order_status = AsyncMock()
+            
+            # Run the status polling method
+            self.async_run_with_timeout(self.connector._status_polling_loop_fetch_updates())
+            
+            # Verify our implemented methods were called
+            mock_balances.assert_called_once()
+            mock_positions.assert_called_once()
 
-    def test_place_order_TODO(self):
-        """TODO: Test order placement - requires API mocking"""
-        self.skipTest("TODO: Implement order placement testing")
+    def test_format_trading_rules_basic(self):
+        """Test trading rules formatting with basic exchange info"""
+        exchange_info = {
+            "symbols": [
+                {
+                    "symbol": "BTCUSDT",
+                    "baseAsset": "BTC",
+                    "quoteAsset": "USDT",
+                    "contractType": "PERPETUAL",
+                    "status": "TRADING"
+                }
+            ]
+        }
+        
+        # Mock trading pair conversion
+        async def mock_trading_pair_conversion(symbol):
+            return "BTC-USDT"
+        self.connector.trading_pair_associated_to_exchange_symbol = mock_trading_pair_conversion
+        
+        result = self.async_run_with_timeout(self.connector._format_trading_rules(exchange_info))
+        
+        # Should return trading rules dict with one entry
+        self.assertEqual(len(result), 1)
+        self.assertIn("BTCUSDT", result)
+        trading_rule = result["BTCUSDT"]
+        self.assertEqual(trading_rule.trading_pair, "BTC-USDT")
 
-    def test_place_cancel_TODO(self):
-        """TODO: Test order cancellation - requires API mocking"""
-        self.skipTest("TODO: Implement order cancellation testing")
+    def test_update_balances_basic_structure(self):
+        """Test update balances method structure"""
+        # Mock the API call
+        mock_account_info = {
+            "assets": [
+                {
+                    "asset": "USDT",
+                    "availableBalance": "1000.0",
+                    "walletBalance": "1500.0"
+                }
+            ]
+        }
+        
+        with patch.object(self.connector, '_api_get', new_callable=AsyncMock, return_value=mock_account_info):
+            # This should not raise an exception
+            self.async_run_with_timeout(self.connector._update_balances())
 
-    def test_update_positions_TODO(self):
-        """TODO: Test position updates - requires API mocking"""
-        self.skipTest("TODO: Implement position update testing")
+    def test_update_positions_basic_structure(self):
+        """Test update positions method structure"""
+        # Mock the API call
+        mock_position_info = [
+            {
+                "symbol": "BTCUSDT",
+                "positionSide": "LONG",
+                "unRealizedProfit": "100.5",
+                "entryPrice": "50000.0",
+                "positionAmt": "0.001"
+            }
+        ]
+        
+        # Mock dependencies
+        async def mock_trading_pair_conversion(symbol):
+            return "BTC-USDT"
+        
+        self.connector.trading_pair_associated_to_exchange_symbol = mock_trading_pair_conversion
+        self.connector._perpetual_trading = MagicMock()
+        self.connector._perpetual_trading.get_position.return_value = None  # No existing position
+        
+        with patch.object(self.connector, '_api_get', new_callable=AsyncMock, return_value=mock_position_info):
+            # This should not raise an exception
+            self.async_run_with_timeout(self.connector._update_positions())
 
-    def test_set_trading_pair_leverage_TODO(self):
-        """TODO: Test leverage setting - requires API mocking"""
-        self.skipTest("TODO: Implement leverage setting testing")
+    def test_user_stream_event_listener_basic_structure(self):
+        """Test user stream event listener method structure"""
+        # Mock the iter_user_event_queue to return empty
+        async def mock_iter_empty():
+            return
+            yield  # unreachable
+        
+        with patch.object(self.connector, '_iter_user_event_queue', return_value=mock_iter_empty()):
+            # This should not raise an exception
+            self.async_run_with_timeout(self.connector._user_stream_event_listener())
 
-    def test_fetch_last_fee_payment_TODO(self):
-        """TODO: Test funding fee payment fetch - requires API mocking"""
-        self.skipTest("TODO: Implement funding fee payment testing")
+    # === API method tests with basic mocking ===
+    
+    def test_place_order_parameter_construction(self):
+        """Test place order parameter construction"""
+        from decimal import Decimal
+        from hummingbot.core.data_type.common import OrderType, TradeType, PositionAction, PositionMode
+        
+        # Mock the exchange symbol conversion
+        async def mock_symbol_conversion(trading_pair):
+            return "BTCUSDT"
+        self.connector.exchange_symbol_associated_to_pair = mock_symbol_conversion
+        
+        # Mock the API call to avoid actual network calls
+        mock_order_response = {
+            "orderId": "12345",
+            "updateTime": 1640001112223
+        }
+        
+        # Test basic limit order parameters
+        with patch.object(self.connector, '_api_post', new_callable=AsyncMock, return_value=mock_order_response):
+            result = self.async_run_with_timeout(
+                self.connector._place_order(
+                    order_id="test_order_123",
+                    trading_pair="BTC-USDT", 
+                    amount=Decimal("0.001"),
+                    trade_type=TradeType.BUY,
+                    order_type=OrderType.LIMIT,
+                    price=Decimal("50000")
+                )
+            )
+        
+        # Verify return format
+        order_id, timestamp = result
+        self.assertEqual(order_id, "12345")
+        self.assertIsInstance(timestamp, float)
 
-    def test_trading_pair_position_mode_set_TODO(self):
-        """TODO: Test position mode setting - requires API mocking"""
-        self.skipTest("TODO: Implement position mode setting testing")
+    def test_place_cancel_parameter_construction(self):
+        """Test place cancel parameter construction"""
+        # Create mock tracked order
+        mock_order = MagicMock()
+        mock_order.trading_pair = "BTC-USDT"
+        
+        # Mock the exchange symbol conversion
+        async def mock_symbol_conversion(trading_pair):
+            return "BTCUSDT"
+        self.connector.exchange_symbol_associated_to_pair = mock_symbol_conversion
+        
+        # Mock successful cancellation response
+        mock_cancel_response = {"status": "CANCELED"}
+        
+        with patch.object(self.connector, '_api_delete', new_callable=AsyncMock, return_value=mock_cancel_response):
+            result = self.async_run_with_timeout(
+                self.connector._place_cancel("test_order_123", mock_order)
+            )
+        
+        # Should return True for successful cancellation
+        self.assertTrue(result)
 
-    def test_status_polling_loop_fetch_updates_TODO(self):
-        """TODO: Test status polling - requires complex mocking"""
-        self.skipTest("TODO: Implement status polling testing")
+    def test_set_trading_pair_leverage_successful(self):
+        """Test leverage setting with successful response"""
+        # Mock the exchange symbol conversion
+        async def mock_symbol_conversion(trading_pair):
+            return "BTCUSDT"
+        self.connector.exchange_symbol_associated_to_pair = mock_symbol_conversion
+        
+        # Mock successful response
+        mock_response = {"leverage": 10}
+        
+        with patch.object(self.connector, '_api_post', new_callable=AsyncMock, return_value=mock_response):
+            success, error_msg = self.async_run_with_timeout(
+                self.connector._set_trading_pair_leverage("BTC-USDT", 10)
+            )
+        
+        self.assertTrue(success)
+        self.assertEqual(error_msg, "")
 
-    def test_user_stream_event_listener_TODO(self):
-        """TODO: Test user stream event processing - requires complex mocking"""
-        self.skipTest("TODO: Implement user stream event testing")
+    def test_set_trading_pair_leverage_failure(self):
+        """Test leverage setting with failure"""
+        # Mock the exchange symbol conversion
+        async def mock_symbol_conversion(trading_pair):
+            return "BTCUSDT"
+        self.connector.exchange_symbol_associated_to_pair = mock_symbol_conversion
+        
+        # Mock API failure
+        with patch.object(self.connector, '_api_post', side_effect=Exception("API Error")):
+            success, error_msg = self.async_run_with_timeout(
+                self.connector._set_trading_pair_leverage("BTC-USDT", 10)
+            )
+        
+        self.assertFalse(success)
+        self.assertEqual(error_msg, "API Error")
 
-    def test_update_order_fills_from_trades_TODO(self):
-        """TODO: Test order fill updates - requires complex mocking"""
-        self.skipTest("TODO: Implement order fill update testing")
+    def test_fetch_last_fee_payment_successful(self):
+        """Test fetching last fee payment with successful response"""
+        # Mock the exchange symbol conversion
+        async def mock_symbol_conversion(trading_pair):
+            return "BTCUSDT"
+        self.connector.exchange_symbol_associated_to_pair = mock_symbol_conversion
+        
+        # Mock successful response
+        mock_response = [{
+            "time": 1640001112000,
+            "income": "-0.001",
+            "asset": "USDT"
+        }]
+        
+        with patch.object(self.connector, '_api_get', new_callable=AsyncMock, return_value=mock_response):
+            timestamp, income, asset = self.async_run_with_timeout(
+                self.connector._fetch_last_fee_payment("BTC-USDT")
+            )
+        
+        self.assertEqual(timestamp, 1640001112.0)
+        self.assertEqual(income, Decimal("-0.001"))
+        self.assertEqual(asset, "USDT")
 
-    def test_update_balances_TODO(self):
-        """TODO: Test balance updates - requires API mocking"""
-        self.skipTest("TODO: Implement balance update testing")
+    def test_fetch_last_fee_payment_no_data(self):
+        """Test fetching last fee payment with no data"""
+        # Mock the exchange symbol conversion
+        async def mock_symbol_conversion(trading_pair):
+            return "BTCUSDT"
+        self.connector.exchange_symbol_associated_to_pair = mock_symbol_conversion
+        
+        # Mock empty response
+        with patch.object(self.connector, '_api_get', new_callable=AsyncMock, return_value=[]):
+            timestamp, income, asset = self.async_run_with_timeout(
+                self.connector._fetch_last_fee_payment("BTC-USDT")
+            )
+        
+        # Should return default values
+        self.assertEqual(timestamp, 0)
+        self.assertEqual(income, Decimal("-1"))
+        self.assertEqual(asset, "-1")
 
-    def test_format_trading_rules_TODO(self):
-        """TODO: Test trading rules formatting - requires exchange info mocking"""
-        self.skipTest("TODO: Implement trading rules formatting testing")
+    def test_trading_pair_position_mode_set_oneway(self):
+        """Test setting position mode to ONEWAY"""
+        from hummingbot.core.data_type.common import PositionMode
+        
+        mock_response = {"msg": "success"}
+        
+        with patch.object(self.connector, '_api_post', new_callable=AsyncMock, return_value=mock_response):
+            success, error_msg = self.async_run_with_timeout(
+                self.connector._trading_pair_position_mode_set(PositionMode.ONEWAY, "BTC-USDT")
+            )
+        
+        self.assertTrue(success)
+        self.assertEqual(error_msg, "")
+
+    def test_trading_pair_position_mode_set_hedge(self):
+        """Test setting position mode to HEDGE"""
+        from hummingbot.core.data_type.common import PositionMode
+        
+        mock_response = {"msg": "success"}
+        
+        with patch.object(self.connector, '_api_post', new_callable=AsyncMock, return_value=mock_response):
+            success, error_msg = self.async_run_with_timeout(
+                self.connector._trading_pair_position_mode_set(PositionMode.HEDGE, "BTC-USDT")
+            )
+        
+        self.assertTrue(success)
+        self.assertEqual(error_msg, "")
 
 
 if __name__ == "__main__":
