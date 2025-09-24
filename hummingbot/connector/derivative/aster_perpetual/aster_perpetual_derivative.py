@@ -360,7 +360,8 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
             await self._api_post(
                 path_url=CONSTANTS.SET_LEVERAGE_URL,
                 data=api_params,
-                is_auth_required=True
+                is_auth_required=True,
+                throttler_limit_id=CONSTANTS.SET_LEVERAGE_URL
             )
             return True, ""
         except Exception as e:
@@ -389,13 +390,13 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
                 payment = response[0]
                 return (
                     payment["time"] / 1000.0,  # Convert to seconds
-                    Decimal(str(payment["income"])),
-                    payment["asset"]  # Asset symbol is a string, not Decimal
+                    Decimal("0"),  # Funding rate (not available in income history)
+                    Decimal(str(payment["income"]))  # Payment amount as Decimal
                 )
         except Exception as e:
             self.logger().warning(f"Failed to fetch funding payment for {trading_pair}: {e}")
 
-        return 0, Decimal("-1"), "-1"
+        return 0, Decimal("-1"), Decimal("-1")
 
     async def _trading_pair_position_mode_set(
         self, mode: PositionMode, trading_pair: str
@@ -410,7 +411,8 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
             await self._api_post(
                 path_url=CONSTANTS.CHANGE_POSITION_MODE_URL,
                 data={"dualSidePosition": str(dual_side_position).lower()},
-                is_auth_required=True
+                is_auth_required=True,
+                throttler_limit_id=CONSTANTS.POST_POSITION_MODE_LIMIT_ID
             )
             return True, ""
         except Exception as e:
@@ -431,7 +433,8 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
                 params={
                     "symbol": trading_pair,
                 },
-                is_auth_required=True)
+                is_auth_required=True,
+                throttler_limit_id=CONSTANTS.ACCOUNT_TRADE_LIST_URL)
 
             for trade in all_fills_response:
                 order_id = str(trade.get("orderId"))
@@ -521,7 +524,8 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
                 "symbol": trading_pair,
                 "origClientOrderId": tracked_order.client_order_id,
             },
-            is_auth_required=True
+            is_auth_required=True,
+            throttler_limit_id=CONSTANTS.ORDER_URL
         )
 
         order_state = CONSTANTS.ORDER_STATE[order_update["status"]]
@@ -586,6 +590,11 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
                     order_message = stream_message.get("o")
                     client_order_id = order_message.get("c")
                     tracked_order = self._order_tracker.fetch_order(client_order_id=client_order_id)
+                    
+                    # Also check for lost orders
+                    if tracked_order is None:
+                        tracked_order = self._order_tracker.fetch_lost_order(client_order_id=client_order_id)
+                    
                     if tracked_order is not None:
                         order_update = OrderUpdate(
                             trading_pair=tracked_order.trading_pair,

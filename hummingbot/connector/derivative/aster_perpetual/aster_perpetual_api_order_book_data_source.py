@@ -262,7 +262,7 @@ class AsterPerpetualAPIOrderBookDataSource(PerpetualAPIOrderBookDataSource):
             trading_pair=trading_pair,
             index_price=Decimal(funding_response["indexPrice"]),
             mark_price=Decimal(funding_response["markPrice"]),
-            next_funding_utc_timestamp=int(funding_response["nextFundingTime"] / 1e3),
+            next_funding_utc_timestamp=int(funding_response["nextFundingTime"]),
             rate=Decimal(funding_response["lastFundingRate"]),
         )
 

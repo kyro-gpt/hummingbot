@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import List
 from unittest.mock import AsyncMock, patch
 import aiohttp
+import aioresponses
 import pytest
 
 from hummingbot.client.config.client_config_map import ClientConfigMap
@@ -274,6 +275,14 @@ class AsterPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualDe
             }
         ]
     
+    @property
+    def target_funding_payment_payment_amount(self):
+        return Decimal("-0.001")
+    
+    @property
+    def target_funding_payment_funding_rate(self):
+        return Decimal("0")  # Funding rate not available in income history
+    
     def validate_auth_credentials_present(self, request_call):
         """Validate that Web3 auth credentials are present"""
         request_data = request_call.kwargs.get("data", {})
@@ -394,14 +403,20 @@ class AsterPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualDe
         def cancel_callback(url, **kwargs):
             params = kwargs.get("params", {})
             if params.get("origClientOrderId") == successful_order.client_order_id:
-                return json.dumps({
-                    "orderId": "12345",
-                    "symbol": self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset),
-                    "status": "CANCELED",
-                    "clientOrderId": successful_order.client_order_id
-                })
+                return aioresponses.CallbackResult(
+                    status=200,
+                    payload={
+                        "orderId": "12345",
+                        "symbol": self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset),
+                        "status": "CANCELED",
+                        "clientOrderId": successful_order.client_order_id
+                    }
+                )
             else:
-                return json.dumps({"code": -2011, "msg": "Unknown order sent."})
+                return aioresponses.CallbackResult(
+                    status=400,
+                    payload={"code": -2011, "msg": "Unknown order sent."}
+                )
         
         mock_api.delete(regex_url, callback=cancel_callback)
         return [url]
@@ -646,7 +661,9 @@ class AsterPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualDe
         error_msg = "Invalid leverage"
         response = {"code": -4028, "msg": error_msg}
         mock_api.post(regex_url, body=json.dumps(response), callback=callback, status=400)
-        return url, error_msg
+        # Return the full error message that will actually be logged
+        full_error_msg = f'Error executing request POST {url}. HTTP status is 400. Error: {json.dumps(response)}'
+        return url, full_error_msg
         
     def configure_successful_set_leverage(self, leverage, mock_api, callback=None):
         """Configure successful leverage setting response"""
@@ -721,7 +738,7 @@ class AsterPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualDe
         import hummingbot.connector.derivative.aster_perpetual.aster_perpetual_web_utils as web_utils
         url = web_utils.private_rest_url(CONSTANTS.ORDER_URL, domain=CONSTANTS.TESTNET_DOMAIN)
         regex_url = re.compile(f"^{url}".replace(".", r"\.").replace("?", r"\?") + ".*")
-        response = {"code": CONSTANTS.UNKNOWN_ORDER_ERROR_CODE, "msg": CONSTANTS.UNKNOWN_ORDER_MESSAGE}
+        response = {"code": CONSTANTS.ORDER_NOT_EXIST_ERROR_CODE, "msg": CONSTANTS.ORDER_NOT_EXIST_MESSAGE}
         mock_api.get(regex_url, body=json.dumps(response), callback=callback, status=400)
         return url
     def test_get_buy_and_sell_collateral_tokens(self):
