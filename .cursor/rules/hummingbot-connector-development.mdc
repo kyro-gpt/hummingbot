@@ -37,3 +37,4 @@ description: Hummingbot connector development workflow and critical guidelines
 ## Test Guidance
 - NEVER shortcut source code to make tests pass, e.g. remove branch or hardcode logic
 - Run `conda activate hummingbot` before triggering tests
+- Run pytest with `--timeout=3` timeout setting

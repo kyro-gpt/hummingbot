@@ -466,26 +466,44 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
 
         return trade_updates
 
-    async def _format_trading_rules(self, exchange_info_dict: Dict[str, Any]) -> Dict[str, TradingRule]:
+    async def _format_trading_rules(self, exchange_info_dict: Dict[str, Any]) -> List[TradingRule]:
         """
         Format trading rules from exchange info - adapted from Binance for Aster v3 API
         """
-        trading_rules = {}
+        trading_rules = []
         if "symbols" in exchange_info_dict:
             for rule in exchange_info_dict["symbols"]:
                 if web_utils.is_exchange_information_valid(rule):
-                    trading_rules[rule["symbol"]] = TradingRule(
+                    trading_rule = TradingRule(
                         trading_pair=await self.trading_pair_associated_to_exchange_symbol(symbol=rule["symbol"]),
-                        min_order_size=Decimal("0"),
-                        max_order_size=Decimal("0"),
+                        min_order_size=Decimal("0.001"),
+                        max_order_size=Decimal("1000000"),
+                        min_price_increment=Decimal("0.01"),
+                        min_base_amount_increment=Decimal("0.001"),
                     )
+                    trading_rules.append(trading_rule)
         return trading_rules
 
-    async def _initialize_trading_pair_symbols_from_exchange_info(self, exchange_info: Dict[str, Any]):
+    async def _update_trading_rules(self):
+        """Override to handle errors gracefully"""
+        try:
+            await super()._update_trading_rules()
+        except (IOError, OSError) as e:
+            self.logger().error(f"Invalid symbol.")
+            self.logger().network(
+                f"Error fetching trading rules: {e}",
+                app_warning_msg=f"Could not fetch trading rules from {self.name_cap}. Check network connection."
+            )
+
+    def _initialize_trading_pair_symbols_from_exchange_info(self, exchange_info: Dict[str, Any]):
         """
         Initialize trading pair symbols from exchange info - adapted from Binance
         """
         mapping = bidict()
+        # Handle error responses gracefully
+        if "symbols" not in exchange_info:
+            self.logger().error(f"Invalid exchange info response: {exchange_info}")
+            return
         for symbol_data in filter(web_utils.is_exchange_information_valid, exchange_info["symbols"]):
             mapping[symbol_data["symbol"]] = combine_to_hb_trading_pair(
                 base=symbol_data["baseAsset"], quote=symbol_data["quoteAsset"]
@@ -578,12 +596,26 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
                         )
                         self._order_tracker.process_order_update(order_update)
                 elif event_type == "ACCOUNT_UPDATE":
-                    # Handle balance and position updates
-                    pass
+                    # Handle balance and position updates - adapted from Binance
+                    update_data = stream_message.get("a", {})
+                    # Update balances
+                    for asset in update_data.get("B", []):
+                        asset_name = asset["a"]
+                        self._account_balances[asset_name] = Decimal(asset["wb"])
+                        self._account_available_balances[asset_name] = Decimal(asset["cw"])
+                    
+                    # Update positions
+                    for asset in update_data.get("P", []):
+                        trading_pair = asset["s"]
+                        try:
+                            hb_trading_pair = await self.trading_pair_associated_to_exchange_symbol(trading_pair)
+                        except KeyError:
+                            # Ignore results for which their symbols is not tracked by the connector
+                            continue
             except asyncio.CancelledError:
                 raise
             except Exception:
-                self.logger().exception("Unexpected error in user stream listener.")
+                self.logger().exception("Unexpected error in user stream listener loop.")
 
     async def _get_last_traded_price(self, trading_pair: str) -> float:
         """
