@@ -233,7 +233,7 @@ class AsterPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualDe
     @property
     def is_cancel_request_executed_synchronously_by_server(self): return True
     @property
-    def is_order_fill_http_update_included_in_status_update(self): return True
+    def is_order_fill_http_update_included_in_status_update(self): return False
     @property
     def is_order_fill_http_update_executed_during_websocket_order_event_processing(self): return False
     @property
@@ -437,23 +437,24 @@ class AsterPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualDe
         }
         mock_api.get(order_regex_url, body=json.dumps(order_response), callback=callback)
         
-        # Mock trade fills response
-        trades_url = web_utils.private_rest_url(CONSTANTS.ACCOUNT_TRADE_LIST_URL, domain=CONSTANTS.TESTNET_DOMAIN)
-        trades_regex_url = re.compile(f"^{trades_url}".replace(".", r"\.").replace("?", r"\?") + ".*")
-        trades_response = [
-            {
-                "orderId": "12345",
-                "id": self.expected_fill_trade_id,
-                "price": str(order.price),
-                "qty": str(order.amount),
-                "quoteQty": str(order.price * order.amount),
-                "commission": "10",
-                "commissionAsset": self.quote_asset,
-                "time": 1640001112223,
-                "positionSide": "LONG"
-            }
-        ]
-        mock_api.get(trades_regex_url, body=json.dumps(trades_response), callback=callback)
+        # Only mock trade fills response if order fill updates are included in status updates
+        if self.is_order_fill_http_update_included_in_status_update:
+            trades_url = web_utils.private_rest_url(CONSTANTS.ACCOUNT_TRADE_LIST_URL, domain=CONSTANTS.TESTNET_DOMAIN)
+            trades_regex_url = re.compile(f"^{trades_url}".replace(".", r"\.").replace("?", r"\?") + ".*")
+            trades_response = [
+                {
+                    "orderId": "12345",
+                    "id": self.expected_fill_trade_id,
+                    "price": str(order.price),
+                    "qty": str(order.amount),
+                    "quoteQty": str(order.price * order.amount),
+                    "commission": "10",
+                    "commissionAsset": self.quote_asset,
+                    "time": 1640001112223,
+                    "positionSide": "LONG"
+                }
+            ]
+            mock_api.get(trades_regex_url, body=json.dumps(trades_response), callback=callback)
         
         return order_url
     def configure_canceled_order_status_response(self, order, mock_api, callback=None):
@@ -646,10 +647,12 @@ class AsterPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualDe
                 "c": order.client_order_id,
                 "i": "12345", 
                 "X": "FILLED",
-                "l": "1.0",  # Last filled quantity
-                "L": "50000",  # Last filled price
+                "l": str(order.amount),  # Last filled quantity
+                "L": str(order.price),  # Last filled price
                 "n": "10",  # Commission
-                "N": self.quote_asset  # Commission asset
+                "N": self.quote_asset,  # Commission asset
+                "t": "123",  # Trade ID - required for trade processing
+                "ps": "SHORT"  # Position side
             }
         }
     def configure_failed_set_leverage(self, leverage, mock_api, callback=None):
@@ -681,10 +684,10 @@ class AsterPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualDe
                 "P": [
                     {
                         "s": self.exchange_symbol_for_tokens(self.base_asset, self.quote_asset),
-                        "pa": str(self.expected_partial_fill_amount),
-                        "ep": str(self.expected_partial_fill_price),
+                        "pa": str(-order.amount),
+                        "ep": str(order.price),
                         "up": str(unrealized_pnl),
-                        "ps": "LONG"
+                        "ps": "SHORT"
                     }
                 ]
             }

@@ -25,7 +25,7 @@ from hummingbot.core.api_throttler.data_types import RateLimit
 from hummingbot.core.data_type.common import OrderType, PositionAction, PositionMode, PositionSide, TradeType
 from hummingbot.core.data_type.in_flight_order import InFlightOrder, OrderUpdate, TradeUpdate  # noqa: F401
 from hummingbot.core.data_type.order_book_tracker_data_source import OrderBookTrackerDataSource
-from hummingbot.core.data_type.trade_fee import TokenAmount, TradeFeeBase
+from hummingbot.core.data_type.trade_fee import AddedToCostTradeFee, TokenAmount, TradeFeeBase
 from hummingbot.core.data_type.user_stream_tracker_data_source import UserStreamTrackerDataSource
 from hummingbot.core.utils.async_utils import safe_gather
 from hummingbot.core.utils.estimate_fee import build_trade_fee
@@ -411,8 +411,7 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
             await self._api_post(
                 path_url=CONSTANTS.CHANGE_POSITION_MODE_URL,
                 data={"dualSidePosition": str(dual_side_position).lower()},
-                is_auth_required=True,
-                throttler_limit_id=CONSTANTS.POST_POSITION_MODE_LIMIT_ID
+                is_auth_required=True
             )
             return True, ""
         except Exception as e:
@@ -589,14 +588,42 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
                 if event_type == "ORDER_TRADE_UPDATE":
                     order_message = stream_message.get("o")
                     client_order_id = order_message.get("c")
-                    tracked_order = self._order_tracker.fetch_order(client_order_id=client_order_id)
-                    
-                    # Also check for lost orders
-                    if tracked_order is None:
-                        tracked_order = self._order_tracker.fetch_lost_order(client_order_id=client_order_id)
+                    tracked_order = self._order_tracker.all_fillable_orders.get(client_order_id)
                     
                     if tracked_order is not None:
-                        order_update = OrderUpdate(
+                        trade_id: str = str(order_message.get("t", "0"))
+                        
+                        if trade_id != "0":  # Indicates that there has been a trade
+                            fee_asset = order_message.get("N", tracked_order.quote_asset)
+                            fee_amount = Decimal(order_message.get("n", "0"))
+                            position_side = order_message.get("ps", "LONG")
+                            position_action = (PositionAction.OPEN
+                                               if (tracked_order.trade_type is TradeType.BUY and position_side == "LONG"
+                                                   or tracked_order.trade_type is TradeType.SELL and position_side == "SHORT")
+                                               else PositionAction.CLOSE)
+                            flat_fees = [] if fee_amount == Decimal("0") else [TokenAmount(amount=fee_amount, token=fee_asset)]
+
+                            fee = AddedToCostTradeFee(
+                                percent_token=fee_asset,
+                                flat_fees=flat_fees,
+                            )
+
+                            trade_update: TradeUpdate = TradeUpdate(
+                                trade_id=trade_id,
+                                client_order_id=client_order_id,
+                                exchange_order_id=str(order_message["i"]),
+                                trading_pair=tracked_order.trading_pair,
+                                fill_timestamp=stream_message["E"] * 1e-3,
+                                fill_price=Decimal(order_message["L"]),
+                                fill_base_amount=Decimal(order_message["l"]),
+                                fill_quote_amount=Decimal(order_message["L"]) * Decimal(order_message["l"]),
+                                fee=fee,
+                            )
+                            self._order_tracker.process_trade_update(trade_update)
+
+                    tracked_order = self._order_tracker.all_updatable_orders.get(client_order_id)
+                    if tracked_order is not None:
+                        order_update: OrderUpdate = OrderUpdate(
                             trading_pair=tracked_order.trading_pair,
                             update_timestamp=stream_message["E"] * 1e-3,
                             new_state=CONSTANTS.ORDER_STATE[order_message["X"]],
@@ -621,6 +648,32 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
                         except KeyError:
                             # Ignore results for which their symbols is not tracked by the connector
                             continue
+
+                        side = PositionSide[asset['ps']]
+                        position = self._perpetual_trading.get_position(hb_trading_pair, side)
+                        if position is not None:
+                            amount = Decimal(asset["pa"])
+                            if amount == Decimal("0"):
+                                pos_key = self._perpetual_trading.position_key(hb_trading_pair, side)
+                                self._perpetual_trading.remove_position(pos_key)
+                            else:
+                                position.update_position(position_side=PositionSide[asset["ps"]],
+                                                         unrealized_pnl=Decimal(asset["up"]),
+                                                         entry_price=Decimal(asset["ep"]),
+                                                         amount=Decimal(asset["pa"]))
+                        else:
+                            amount = Decimal(asset["pa"])
+                            if amount != Decimal("0"):
+                                leverage = self._perpetual_trading.get_leverage(hb_trading_pair)
+                                position = Position(
+                                    trading_pair=hb_trading_pair,
+                                    position_side=PositionSide[asset["ps"]],
+                                    unrealized_pnl=Decimal(asset["up"]),
+                                    entry_price=Decimal(asset["ep"]),
+                                    amount=Decimal(asset["pa"]),
+                                    leverage=leverage
+                                )
+                                self._perpetual_trading.set_position(hb_trading_pair, position)
             except asyncio.CancelledError:
                 raise
             except Exception:
