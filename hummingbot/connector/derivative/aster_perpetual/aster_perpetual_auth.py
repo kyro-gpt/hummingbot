@@ -263,20 +263,39 @@ class AsterPerpetualAuth(AuthBase):
 
     async def rest_authenticate(self, request: RESTRequest) -> RESTRequest:
         """
-        Authenticate REST request with Web3 signature
+        Authenticate REST request with unified authentication (v1 HMAC or v3 Web3)
         """
+        # Add authentication headers
+        if request.headers is None:
+            request.headers = {}
+        auth_headers = self.get_headers()
+        request.headers.update(auth_headers)
+
         if request.method == RESTMethod.POST:
-            # For POST requests, parse JSON data and authenticate
+            # Handle POST requests based on API version
             if request.data:
                 if isinstance(request.data, str):
+                    # If data is already a string, assume it's JSON and parse it
                     params = json.loads(request.data)
                 else:
+                    # If data is a dict, use it directly
                     params = request.data or {}
             else:
                 params = {}
 
+            # Add authentication parameters
             authenticated_params = self.add_auth_to_params(params)
-            request.data = authenticated_params
+            
+            # Format data based on API version
+            if self.api_version == API_VERSION_V1:
+                # v1 uses URL-encoded form data (HMAC authentication)
+                from urllib.parse import urlencode
+                request.data = urlencode(authenticated_params)
+                request.headers["Content-Type"] = "application/x-www-form-urlencoded"
+            else:
+                # v3 uses JSON data (Web3 authentication)
+                request.data = json.dumps(authenticated_params)
+                request.headers["Content-Type"] = "application/json"
 
         else:
             # For GET/DELETE requests, authenticate URL parameters

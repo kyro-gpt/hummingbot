@@ -1,5 +1,6 @@
 import asyncio  # noqa: F401
 import time
+from collections import defaultdict
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
@@ -56,16 +57,16 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
             self,
             client_config_map: "ClientConfigAdapter",
             aster_perpetual_user_wallet: str = None,
-            aster_perpetual_signer_wallet: str = None,
-            aster_perpetual_private_key: str = None,
+            aster_perpetual_api_key: str = None,
+            aster_perpetual_secret_key: str = None,
             trading_pairs: Optional[List[str]] = None,
             trading_required: bool = True,
             domain: str = CONSTANTS.DOMAIN,
     ):
-        # Web3 authentication parameters (different from Binance API keys)
+        # Unified authentication parameters (supports both v1 HMAC and v3 Web3)
         self.aster_perpetual_user_wallet = aster_perpetual_user_wallet
-        self.aster_perpetual_signer_wallet = aster_perpetual_signer_wallet
-        self.aster_perpetual_private_key = aster_perpetual_private_key
+        self.aster_perpetual_api_key = aster_perpetual_api_key
+        self.aster_perpetual_secret_key = aster_perpetual_secret_key
 
         self._trading_required = trading_required
         self._trading_pairs = trading_pairs
@@ -81,12 +82,13 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
     @property
     def authenticator(self) -> AsterPerpetualAuth:
         """
-        Returns Web3 ECDSA authenticator (different from Binance HMAC-SHA256)
+        Returns unified authenticator (uses default version internally)
         """
         return AsterPerpetualAuth(
             user_wallet=self.aster_perpetual_user_wallet,
-            signer_wallet=self.aster_perpetual_signer_wallet,
-            private_key=self.aster_perpetual_private_key
+            api_key=self.aster_perpetual_api_key,
+            secret_key=self.aster_perpetual_secret_key,
+            api_version=CONSTANTS.DEFAULT_API_VERSION
         )
 
     @property
@@ -425,7 +427,14 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
         """
         trade_updates = []
         try:
-            exchange_order_id = await order.get_exchange_order_id()
+            # Try to get exchange order ID with a shorter timeout
+            try:
+                exchange_order_id = await asyncio.wait_for(order.get_exchange_order_id(), timeout=1.0)
+            except asyncio.TimeoutError:
+                # If we can't get the exchange order ID, skip this update
+                self.logger().debug(f"Skipping trade updates for {order.client_order_id} - exchange order ID not available yet")
+                return trade_updates
+            
             trading_pair = await self.exchange_symbol_associated_to_pair(trading_pair=order.trading_pair)
             all_fills_response = await self._api_get(
                 path_url=CONSTANTS.ACCOUNT_TRADE_LIST_URL,
@@ -462,9 +471,8 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
                     )
                     trade_updates.append(trade_update)
 
-        except asyncio.TimeoutError:
-            raise IOError(f"Skipped order update with order fills for {order.client_order_id} "
-                          "- waiting for exchange order id.")
+        except Exception as e:
+            self.logger().debug(f"Error fetching trade updates for {order.client_order_id}: {e}")
 
         return trade_updates
 
@@ -577,6 +585,75 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
             self._update_balances(),
             self._update_positions(),
         )
+
+    async def _update_order_fills_from_trades(self):
+        """
+        This is intended to be a backup measure to get filled events with trade ID for orders,
+        in case Aster's user stream events are not working.
+        Adapted from Binance perpetual implementation.
+        """
+        last_tick = int(self._last_poll_timestamp / self.UPDATE_ORDER_STATUS_MIN_INTERVAL)
+        current_tick = int(self.current_timestamp / self.UPDATE_ORDER_STATUS_MIN_INTERVAL)
+        if current_tick > last_tick and len(self._order_tracker.active_orders) > 0:
+            trading_pairs_to_order_map: Dict[str, Dict[str, Any]] = {}
+            for order in self._order_tracker.active_orders.values():
+                # Skip orders without exchange order ID
+                if not hasattr(order, 'exchange_order_id') or order.exchange_order_id is None:
+                    continue
+                if order.trading_pair not in trading_pairs_to_order_map:
+                    trading_pairs_to_order_map[order.trading_pair] = {}
+                trading_pairs_to_order_map[order.trading_pair][order.exchange_order_id] = order
+            
+            trading_pairs = list(trading_pairs_to_order_map.keys())
+            tasks = [
+                self._api_get(
+                    path_url=CONSTANTS.ACCOUNT_TRADE_LIST_URL,
+                    params={"symbol": await self.exchange_symbol_associated_to_pair(trading_pair=trading_pair)},
+                    is_auth_required=True,
+                )
+                for trading_pair in trading_pairs
+            ]
+            self.logger().debug(f"Polling for order fills of {len(tasks)} trading_pairs.")
+            results = await safe_gather(*tasks, return_exceptions=True)
+            
+            for trades, trading_pair in zip(results, trading_pairs):
+                order_map = trading_pairs_to_order_map.get(trading_pair)
+                if isinstance(trades, Exception):
+                    self.logger().network(
+                        f"Error fetching trades update for the order {trading_pair}: {trades}.",
+                        app_warning_msg=f"Failed to fetch trade update for {trading_pair}."
+                    )
+                    continue
+                    
+                for trade in trades:
+                    order_id = str(trade.get("orderId"))
+                    if order_id in order_map:
+                        tracked_order: InFlightOrder = order_map.get(order_id)
+                        position_side = trade["positionSide"]
+                        position_action = (PositionAction.OPEN
+                                         if (tracked_order.trade_type is TradeType.BUY and position_side == "LONG")
+                                         or (tracked_order.trade_type is TradeType.SELL and position_side == "SHORT")
+                                         else PositionAction.CLOSE)
+                        fee = TradeFeeBase.new_spot_fee(
+                            fee_schema=self.trade_fee_schema(),
+                            trade_type=tracked_order.trade_type,
+                            percent_token=trade["commissionAsset"],
+                            flat_fees=[TokenAmount(amount=Decimal(trade["commission"]), token=trade["commissionAsset"])]
+                        )
+                        trade_update = TradeUpdate(
+                            trade_id=str(trade["id"]),
+                            client_order_id=tracked_order.client_order_id,
+                            exchange_order_id=order_id,
+                            trading_pair=tracked_order.trading_pair,
+                            fee=fee,
+                            fill_base_amount=Decimal(trade["qty"]),
+                            fill_quote_amount=Decimal(trade["quoteQty"]),
+                            fill_price=Decimal(trade["price"]),
+                            fill_timestamp=trade["time"] * 1e-3,
+                            position_side=PositionSide[position_side],
+                            position_action=position_action,
+                        )
+                        self._order_tracker.process_trade_update(trade_update)
 
     async def _user_stream_event_listener(self):
         """

@@ -15,9 +15,11 @@ class AsterPerpetualRESTPreProcessor(RESTPreProcessorBase):
     async def pre_process(self, request: RESTRequest) -> RESTRequest:
         if request.headers is None:
             request.headers = {}
-        request.headers["Content-Type"] = (
-            "application/json" if request.method == RESTMethod.POST else "application/x-www-form-urlencoded"
-        )
+        # Only set Content-Type if not already set (preserve auth headers)
+        # The authenticator will set the correct Content-Type based on API version
+        if "Content-Type" not in request.headers:
+            # Default fallback (should rarely be used since auth sets it)
+            request.headers["Content-Type"] = "application/x-www-form-urlencoded"
         return request
 
 

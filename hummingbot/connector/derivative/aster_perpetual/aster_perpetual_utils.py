@@ -22,15 +22,7 @@ BROKER_ID = "x-aster-hb"  # To be assigned by Aster team
 class AsterPerpetualConfigMap(BaseConnectorConfigMap):
     connector: str = "aster_perpetual"
 
-    # API Version Selection
-    aster_perpetual_api_version: str = Field(
-        default="v1",
-        json_schema_extra={
-            "prompt": "Select API version (v1=HMAC auth, v3=Web3 auth)",
-            "is_secure": False, "is_connect_key": True, "prompt_on_new": True}
-    )
-
-    # Unified Authentication Configuration (same 3 fields for both v1 and v3)
+    # Unified Authentication Configuration (version is hardcoded internally)
     aster_perpetual_user_wallet: SecretStr = Field(
         default=...,
         json_schema_extra={
