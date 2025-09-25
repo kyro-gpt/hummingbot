@@ -484,52 +484,38 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
                     self.logger().warning("WARNING: Some markets are not connected or are down at the moment. Market "
                                           "making may be dangerous when markets or networks are unstable.")
 
-            # IMPROVED LOGIC: Always create market making orders, but filter for position management
-            managing_positions = self.should_manage_positions(session_positions)
-            
-            if managing_positions:
-                self.logger().info(f"🔍 POSITION MANAGEMENT MODE: Continue market making with directional bias")
+            # only create orders if the position size is smaller than the threshold
+            # otherwise, we will manage positions
+            if not self.should_manage_positions(session_positions):
+                self.logger().info(f"🔍 INITIATING ORDER CREATION")
+                self._exit_orders = dict()  # Empty list of exit order at this point to reduce size
+                proposal = None
+                if self._create_timestamp <= self.current_timestamp:
+                    # 1. Create base order proposals
+                    proposal = self.create_base_proposal()
+                    self.logger().debug(f"Initial proposals: {proposal}")
+                    # 2. Apply functions that limit numbers of buys and sells proposal
+                    self.apply_order_levels_modifiers(proposal)
+                    self.logger().debug(f"Proposals after order level modifier: {proposal}")
+                    # 3. Apply functions that modify orders price
+                    self.apply_order_price_modifiers(proposal)
+                    self.logger().debug(f"Proposals after order price modifiers: {proposal}")
+                    # 4. Apply budget constraint, i.e. can't buy/sell more than what you have.
+                    self.apply_budget_constraint(proposal)
+                    self.logger().debug(f"Proposals after budget constraints: {proposal}")
+
+                    self.filter_out_takers(proposal)
+                    self.logger().debug(f"Proposals after takers filter: {proposal}")
+
+                self.cancel_active_orders(proposal)
+                self.cancel_orders_below_min_spread()
+                if self.to_create_orders(proposal):
+                    self.execute_orders_proposal(proposal, PositionAction.OPEN)
+                # Reset peak ask and bid prices
+                self._ts_peak_ask_price = market.get_price(self.trading_pair, False)
+                self._ts_peak_bid_price = market.get_price(self.trading_pair, True)
             else:
-                self.logger().info(f"🔍 NORMAL MARKET MAKING MODE")
-                self._exit_orders = dict()  # Empty list of exit orders when not managing positions
-            
-            proposal = None
-            if self._create_timestamp <= self.current_timestamp:
-                # 1. Create base order proposals (always)
-                proposal = self.create_base_proposal()
-                self.logger().debug(f"Initial proposals: {proposal}")
-                
-                # 2. If managing positions, filter to only position-closing orders
-                if managing_positions:
-                    proposal = self.filter_proposal_for_position_closing(proposal, session_positions)
-                    self.logger().debug(f"Proposals after position management filter: {proposal}")
-                
-                # 3. Apply functions that limit numbers of buys and sells proposal
-                self.apply_order_levels_modifiers(proposal)
-                self.logger().debug(f"Proposals after order level modifier: {proposal}")
-                # 4. Apply functions that modify orders price
-                self.apply_order_price_modifiers(proposal)
-                self.logger().debug(f"Proposals after order price modifiers: {proposal}")
-                # 5. Apply budget constraint, i.e. can't buy/sell more than what you have.
-                self.apply_budget_constraint(proposal)
-                self.logger().debug(f"Proposals after budget constraints: {proposal}")
-
-                self.filter_out_takers(proposal)
-                self.logger().debug(f"Proposals after takers filter: {proposal}")
-
-            self.cancel_active_orders(proposal)
-            self.cancel_orders_below_min_spread()
-            if self.to_create_orders(proposal):
-                action = PositionAction.CLOSE if managing_positions else PositionAction.OPEN
-                self.execute_orders_proposal(proposal, action)
-            
-            # # Always check for take profit and stop loss when managing positions
-            # if managing_positions:
-            #     self.manage_positions(session_positions)
-                
-            # Reset peak ask and bid prices
-            self._ts_peak_ask_price = market.get_price(self.trading_pair, False)
-            self._ts_peak_bid_price = market.get_price(self.trading_pair, True)
+                self.manage_positions(session_positions)
         finally:
             self._last_timestamp = timestamp
 
@@ -556,38 +542,6 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
             return True
 
         return False
-
-    def filter_proposal_for_position_closing(self, proposal: Proposal, session_positions: List[Position]) -> Proposal:
-        """
-        Filter proposal to only include orders that close existing positions.
-        This allows continued market making while managing position risk.
-        """
-        if not session_positions:
-            return proposal
-        
-        # Calculate net position (positive = long, negative = short)
-        net_position = sum(position.amount for position in session_positions)
-        
-        filtered_buys = []
-        filtered_sells = []
-        
-        # If net SHORT position (negative), only allow BUY orders (to close shorts)
-        if net_position < 0:
-            filtered_buys = proposal.buys
-            self.logger().info(f"Position management: NET SHORT {abs(net_position):.4f}, allowing only BUY orders to close position")
-        
-        # If net LONG position (positive), only allow SELL orders (to close longs)  
-        elif net_position > 0:
-            filtered_sells = proposal.sells
-            self.logger().info(f"Position management: NET LONG {net_position:.4f}, allowing only SELL orders to close position")
-        
-        # If no net position, allow all orders
-        else:
-            filtered_buys = proposal.buys
-            filtered_sells = proposal.sells
-            self.logger().info("Position management: No net position, allowing all orders")
-            
-        return Proposal(filtered_buys, filtered_sells)
 
     def profit_taking_proposal(self, mode: PositionMode, active_positions: List) -> Proposal:
 
