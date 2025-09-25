@@ -336,15 +336,20 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
         )
 
         for position_data in position_info:
-            trading_pair = await self.trading_pair_associated_to_exchange_symbol(symbol=position_data["symbol"])
-            position = self._perpetual_trading.get_position(trading_pair)
-            if position is not None:
-                position.update_position(
-                    position_side=PositionSide[position_data["positionSide"]],
-                    unrealized_pnl=Decimal(position_data["unRealizedProfit"]),
-                    entry_price=Decimal(position_data["entryPrice"]),
-                    amount=Decimal(position_data["positionAmt"]),
-                )
+            try:
+                trading_pair = await self.trading_pair_associated_to_exchange_symbol(symbol=position_data["symbol"])
+                position = self._perpetual_trading.get_position(trading_pair)
+                if position is not None:
+                    position.update_position(
+                        position_side=PositionSide[position_data["positionSide"]],
+                        unrealized_pnl=Decimal(position_data["unRealizedProfit"]),
+                        entry_price=Decimal(position_data["entryPrice"]),
+                        amount=Decimal(position_data["positionAmt"]),
+                    )
+            except KeyError:
+                # Skip symbols that aren't in our configured trading pairs
+                self.logger().debug(f"Skipping position update for unknown symbol: {position_data['symbol']}")
+                continue
 
     async def _set_trading_pair_leverage(self, trading_pair: str, leverage: int) -> Tuple[bool, str]:
         """
@@ -484,14 +489,35 @@ class AsterPerpetualDerivative(PerpetualDerivativePyBase):
         if "symbols" in exchange_info_dict:
             for rule in exchange_info_dict["symbols"]:
                 if web_utils.is_exchange_information_valid(rule):
-                    trading_rule = TradingRule(
-                        trading_pair=await self.trading_pair_associated_to_exchange_symbol(symbol=rule["symbol"]),
-                        min_order_size=Decimal("0.001"),
-                        max_order_size=Decimal("1000000"),
-                        min_price_increment=Decimal("0.01"),
-                        min_base_amount_increment=Decimal("0.001"),
-                    )
-                    trading_rules.append(trading_rule)
+                    try:
+                        trading_pair = await self.trading_pair_associated_to_exchange_symbol(symbol=rule["symbol"])
+                        
+                        # Extract precision from filters (like Binance)
+                        filters = rule.get("filters", [])
+                        filt_dict = {fil["filterType"]: fil for fil in filters}
+                        
+                        # Get LOT_SIZE filter for quantity precision
+                        lot_size_filter = filt_dict.get("LOT_SIZE", {})
+                        min_order_size = Decimal(lot_size_filter.get("minQty", "0.001"))
+                        max_order_size = Decimal(lot_size_filter.get("maxQty", "1000000"))
+                        step_size = Decimal(lot_size_filter.get("stepSize", "0.001"))
+                        
+                        # Get PRICE_FILTER for price precision
+                        price_filter = filt_dict.get("PRICE_FILTER", {})
+                        tick_size = Decimal(price_filter.get("tickSize", "0.01"))
+                        
+                        trading_rule = TradingRule(
+                            trading_pair=trading_pair,
+                            min_order_size=min_order_size,
+                            max_order_size=max_order_size,
+                            min_price_increment=tick_size,
+                            min_base_amount_increment=step_size,
+                        )
+                        trading_rules.append(trading_rule)
+                    except KeyError:
+                        # Skip symbols that aren't in our configured trading pairs
+                        self.logger().debug(f"Skipping trading rule for unknown symbol: {rule['symbol']}")
+                        continue
         return trading_rules
 
     async def _update_trading_rules(self):
