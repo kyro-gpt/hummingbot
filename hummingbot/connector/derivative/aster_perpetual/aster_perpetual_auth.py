@@ -1,38 +1,121 @@
+import hashlib
+import hmac
 import json
 import math
 import time
 from typing import Any, Dict
+from urllib.parse import urlencode
 
 from eth_abi import encode
 from eth_account import Account
 from eth_account.messages import encode_defunct
 from web3 import Web3
 
+from hummingbot.connector.derivative.aster_perpetual.aster_perpetual_constants import (
+    API_VERSION_V1,
+    API_VERSION_V3,
+    DEFAULT_API_VERSION,
+)
 from hummingbot.core.web_assistant.auth import AuthBase
 from hummingbot.core.web_assistant.connections.data_types import RESTMethod, RESTRequest, WSRequest
 
 
 class AsterPerpetualAuth(AuthBase):
     """
-    Auth class for Aster Perpetual API using Web3 ECDSA signatures
+    Auth class for Aster Perpetual API supporting both v1 HMAC and v3 Web3 authentication
 
-    Based on Aster's Web3 authentication requirements:
-    - Uses user wallet, signer wallet, and private key
-    - Generates signatures using eth_account and web3
-    - ABI encodes parameters with Keccak hashing
+    Automatically detects authentication method based on provided credentials:
+    - v1: api_key + secret_key → HMAC SHA256 authentication
+    - v3: user_wallet + private_key → Web3 ECDSA authentication
     """
 
-    def __init__(self, user_wallet: str, signer_wallet: str, private_key: str):
+    def __init__(self,
+                 user_wallet: str,
+                 api_key: str,
+                 secret_key: str,
+                 api_version: str = DEFAULT_API_VERSION):
         """
-        Initialize Aster Perpetual authentication
+        Initialize Aster Perpetual authentication with unified credentials
 
-        :param user_wallet: Main account wallet address (user)
-        :param signer_wallet: API wallet address (signer)
-        :param private_key: Private key for signer wallet (without 0x prefix handling)
+        Args:
+            user_wallet: User wallet address (used for v3, ignored for v1)
+            api_key: API key (used for both v1 and v3 headers)
+            secret_key: Secret key (used as HMAC secret for v1, as private key for v3)
+            api_version: "v1" for HMAC SHA256, "v3" for Web3 ECDSA
         """
-        self._user_wallet: str = user_wallet
-        self._signer_wallet: str = signer_wallet
-        self._private_key: str = private_key if private_key.startswith('0x') else f'0x{private_key}'
+        # Store common credentials
+        self.api_version = api_version
+        self.api_key = api_key
+        self.secret_key = secret_key
+        self._user_wallet = user_wallet
+
+        # Validate required credentials
+        if not api_key or not secret_key:
+            raise ValueError("api_key and secret_key are required")
+
+        if api_version == API_VERSION_V1:
+            # v1 HMAC authentication - only needs api_key + secret_key
+            # user_wallet is ignored but stored for potential future use
+            self._signer_wallet = None
+            self._private_key = None
+
+        elif api_version == API_VERSION_V3:
+            # v3 Web3 authentication - secret_key is treated as private_key
+            if not user_wallet:
+                raise ValueError("v3 authentication requires user_wallet")
+
+            # Validate user wallet address
+            self._validate_address(user_wallet, "user_wallet")
+
+            # Treat secret_key as private_key for v3
+            private_key = secret_key
+
+            # Ensure private key has 0x prefix
+            self._private_key = private_key if private_key.startswith('0x') else f'0x{private_key}'
+
+            # Derive signer address from private key
+            try:
+                account = Account.from_key(self._private_key)
+                self._signer_wallet = account.address
+            except Exception as e:
+                raise ValueError(f"Invalid private key (secret_key): {e}")
+
+            # Ensure user and signer are different (critical for Aster API)
+            if self._user_wallet.lower() == self._signer_wallet.lower():
+                raise ValueError(
+                    f"User wallet and signer wallet cannot be the same address!\n"
+                    f"  User:   {self._user_wallet}\n"
+                    f"  Signer: {self._signer_wallet} (derived from secret_key)\n"
+                    f"  You need to provide a different user wallet address than the one derived from your secret_key."
+                )
+        else:
+            raise ValueError(f"Unsupported API version: {api_version}")
+
+    def _validate_address(self, address: str, field_name: str):
+        """
+        Validate Ethereum address format
+
+        :param address: The address to validate
+        :param field_name: Name of the field for error messages
+        :raises ValueError: If address format is invalid
+        """
+        if not isinstance(address, str):
+            raise ValueError(f"{field_name} must be a string")
+
+        if not address.startswith('0x'):
+            raise ValueError(f"{field_name} must start with '0x'. Got: {address}")
+
+        if len(address) != 42:
+            raise ValueError(
+                f"{field_name} must be exactly 42 characters (0x + 40 hex chars). "
+                f"Got {len(address)} characters: {address}"
+            )
+
+        # Check if the address contains only valid hex characters
+        try:
+            int(address[2:], 16)
+        except ValueError:
+            raise ValueError(f"{field_name} contains invalid hex characters: {address}")
 
     def _generate_nonce(self) -> int:
         """Generate microsecond timestamp nonce"""
@@ -103,13 +186,34 @@ class AsterPerpetualAuth(AuthBase):
         # Return signature with 0x prefix
         return '0x' + signed_message.signature.hex()
 
-    def add_auth_to_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Add Aster Web3 authentication parameters to request
+    def _add_v1_hmac_auth(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Add v1 HMAC SHA256 authentication to parameters"""
+        # Remove None values
+        clean_params = {key: value for key, value in params.items() if value is not None}
 
-        :param params: Original request parameters
-        :return: Parameters with authentication data added
-        """
+        # Add timestamp and recvWindow if not present
+        if 'timestamp' not in clean_params:
+            clean_params['timestamp'] = int(time.time() * 1000)
+        if 'recvWindow' not in clean_params:
+            clean_params['recvWindow'] = 5000
+
+        # Create query string for signing (don't sort - use original order)
+        query_string = urlencode(clean_params)
+
+        # Create HMAC SHA256 signature
+        signature = hmac.new(
+            self.secret_key.encode('utf-8'),
+            query_string.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+
+        # Add signature to parameters
+        clean_params['signature'] = signature
+
+        return clean_params
+
+    def _add_v3_web3_auth(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Add v3 Web3 ECDSA authentication to parameters"""
         # Remove None values (as done in Aster example)
         clean_params = {key: value for key, value in params.items() if value is not None}
 
@@ -131,6 +235,31 @@ class AsterPerpetualAuth(AuthBase):
         clean_params['signature'] = signature
 
         return clean_params
+
+    def add_auth_to_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Add authentication parameters based on configured version
+
+        :param params: Original request parameters
+        :return: Parameters with authentication data added
+        """
+        if self.api_version == API_VERSION_V1:
+            return self._add_v1_hmac_auth(params)
+        elif self.api_version == API_VERSION_V3:
+            return self._add_v3_web3_auth(params)
+        else:
+            raise ValueError(f"Unsupported API version: {self.api_version}")
+
+    def get_headers(self) -> Dict[str, str]:
+        """Get headers required for authentication"""
+        headers = {
+            'User-Agent': 'HummingBot/1.0',
+        }
+
+        if self.api_key:
+            headers['X-MBX-APIKEY'] = self.api_key
+
+        return headers
 
     async def rest_authenticate(self, request: RESTRequest) -> RESTRequest:
         """

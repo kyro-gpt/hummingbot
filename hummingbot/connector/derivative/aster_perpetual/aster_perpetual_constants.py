@@ -5,6 +5,11 @@ EXCHANGE_NAME = "aster_perpetual"
 BROKER_ID = "x-aster-hb"  # To be assigned by Aster team
 MAX_ORDER_ID_LEN = 32
 
+# API Version Control
+API_VERSION_V1 = "v1"
+API_VERSION_V3 = "v3"
+DEFAULT_API_VERSION = API_VERSION_V1  # Default to v1 (working HMAC auth)
+
 DOMAIN = EXCHANGE_NAME
 TESTNET_DOMAIN = "aster_perpetual_testnet"
 
@@ -25,33 +30,84 @@ TIME_IN_FORCE_GTX = "GTX"  # Good Till Crossing
 TIME_IN_FORCE_IOC = "IOC"  # Immediate or cancel
 TIME_IN_FORCE_FOK = "FOK"  # Fill or kill
 
-# Public API v3 Endpoints - Aster uses v3 instead of v1/v2
-SNAPSHOT_REST_URL = "v3/depth"
-TICKER_PRICE_URL = "v3/ticker/bookTicker"
-TICKER_PRICE_CHANGE_URL = "v3/ticker/24hr"
-EXCHANGE_INFO_URL = "v3/exchangeInfo"
-RECENT_TRADES_URL = "v3/trades"
-PING_URL = "v3/ping"
-MARK_PRICE_URL = "v3/premiumIndex"
-SERVER_TIME_PATH_URL = "v3/time"
+# Version-specific endpoint mappings
+ENDPOINTS = {
+    API_VERSION_V1: {
+        # Public endpoints
+        "SNAPSHOT_REST_URL": "v1/depth",
+        "TICKER_PRICE_URL": "v1/ticker/bookTicker",
+        "TICKER_PRICE_CHANGE_URL": "v1/ticker/24hr",
+        "EXCHANGE_INFO_URL": "v1/exchangeInfo",
+        "RECENT_TRADES_URL": "v1/trades",
+        "PING_URL": "v1/ping",
+        "MARK_PRICE_URL": "v1/premiumIndex",
+        "SERVER_TIME_PATH_URL": "v1/time",
 
-# Private API v3 Endpoints - Aster uses v3 for all endpoints
-ORDER_URL = "v3/order"
-CANCEL_ALL_OPEN_ORDERS_URL = "v3/allOpenOrders"
-ACCOUNT_TRADE_LIST_URL = "v3/userTrades"
-SET_LEVERAGE_URL = "v3/leverage"
-GET_INCOME_HISTORY_URL = "v3/income"
-CHANGE_POSITION_MODE_URL = "v3/positionSide/dual"
+        # Private endpoints (HMAC SHA256 auth)
+        "ORDER_URL": "v1/order",
+        "CANCEL_ALL_OPEN_ORDERS_URL": "v1/allOpenOrders",
+        "ACCOUNT_TRADE_LIST_URL": "v1/userTrades",
+        "SET_LEVERAGE_URL": "v1/leverage",
+        "GET_INCOME_HISTORY_URL": "v1/income",
+        "CHANGE_POSITION_MODE_URL": "v1/positionSide/dual",
+        "ACCOUNT_INFO_URL": "v2/account",  # v1 uses v2 for account info
+        "POSITION_INFORMATION_URL": "v2/positionRisk",
+    },
+    API_VERSION_V3: {
+        # Public endpoints
+        "SNAPSHOT_REST_URL": "v3/depth",
+        "TICKER_PRICE_URL": "v3/ticker/bookTicker",
+        "TICKER_PRICE_CHANGE_URL": "v3/ticker/24hr",
+        "EXCHANGE_INFO_URL": "v3/exchangeInfo",
+        "RECENT_TRADES_URL": "v3/trades",
+        "PING_URL": "v3/ping",
+        "MARK_PRICE_URL": "v3/premiumIndex",
+        "SERVER_TIME_PATH_URL": "v3/time",
+
+        # Private endpoints (Web3 ECDSA auth)
+        "ORDER_URL": "v3/order",
+        "CANCEL_ALL_OPEN_ORDERS_URL": "v3/allOpenOrders",
+        "ACCOUNT_TRADE_LIST_URL": "v3/userTrades",
+        "SET_LEVERAGE_URL": "v3/leverage",
+        "GET_INCOME_HISTORY_URL": "v3/income",
+        "CHANGE_POSITION_MODE_URL": "v3/positionSide/dual",
+        "ACCOUNT_INFO_URL": "v3/account",
+        "POSITION_INFORMATION_URL": "v3/positionRisk",
+    }
+}
+
+# Helper function to get endpoint for current version
+
+
+def get_endpoint(endpoint_name: str, api_version: str = DEFAULT_API_VERSION) -> str:
+    return ENDPOINTS[api_version][endpoint_name]
+
+
+# Backward compatibility - use default version
+SNAPSHOT_REST_URL = get_endpoint("SNAPSHOT_REST_URL")
+TICKER_PRICE_URL = get_endpoint("TICKER_PRICE_URL")
+TICKER_PRICE_CHANGE_URL = get_endpoint("TICKER_PRICE_CHANGE_URL")
+EXCHANGE_INFO_URL = get_endpoint("EXCHANGE_INFO_URL")
+RECENT_TRADES_URL = get_endpoint("RECENT_TRADES_URL")
+PING_URL = get_endpoint("PING_URL")
+MARK_PRICE_URL = get_endpoint("MARK_PRICE_URL")
+SERVER_TIME_PATH_URL = get_endpoint("SERVER_TIME_PATH_URL")
+ORDER_URL = get_endpoint("ORDER_URL")
+CANCEL_ALL_OPEN_ORDERS_URL = get_endpoint("CANCEL_ALL_OPEN_ORDERS_URL")
+ACCOUNT_TRADE_LIST_URL = get_endpoint("ACCOUNT_TRADE_LIST_URL")
+SET_LEVERAGE_URL = get_endpoint("SET_LEVERAGE_URL")
+GET_INCOME_HISTORY_URL = get_endpoint("GET_INCOME_HISTORY_URL")
+CHANGE_POSITION_MODE_URL = get_endpoint("CHANGE_POSITION_MODE_URL")
 
 POST_POSITION_MODE_LIMIT_ID = f"POST{CHANGE_POSITION_MODE_URL}"
 GET_POSITION_MODE_LIMIT_ID = f"GET{CHANGE_POSITION_MODE_URL}"
 
-# Account and Position endpoints
-ACCOUNT_INFO_URL = "v3/account"
-POSITION_INFORMATION_URL = "v3/positionRisk"
+# Account and Position endpoints - use default version
+ACCOUNT_INFO_URL = get_endpoint("ACCOUNT_INFO_URL")
+POSITION_INFORMATION_URL = get_endpoint("POSITION_INFORMATION_URL")
 
 # User Stream Endpoint - Same pattern as Binance
-ASTER_PERPETUAL_USER_STREAM_ENDPOINT = "v3/listenKey"
+ASTER_PERPETUAL_USER_STREAM_ENDPOINT = get_endpoint("ORDER_URL").replace("/order", "/listenKey")
 
 # Funding Settlement Time Span
 FUNDING_SETTLEMENT_DURATION = (0, 30)  # seconds before snapshot, seconds after snapshot

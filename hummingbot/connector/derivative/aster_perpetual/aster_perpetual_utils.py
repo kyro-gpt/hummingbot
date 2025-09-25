@@ -22,23 +22,31 @@ BROKER_ID = "x-aster-hb"  # To be assigned by Aster team
 class AsterPerpetualConfigMap(BaseConnectorConfigMap):
     connector: str = "aster_perpetual"
 
-    # Web3 Authentication Configuration - Different from traditional API keys
+    # API Version Selection
+    aster_perpetual_api_version: str = Field(
+        default="v1",
+        json_schema_extra={
+            "prompt": "Select API version (v1=HMAC auth, v3=Web3 auth)",
+            "is_secure": False, "is_connect_key": True, "prompt_on_new": True}
+    )
+
+    # Unified Authentication Configuration (same 3 fields for both v1 and v3)
     aster_perpetual_user_wallet: SecretStr = Field(
         default=...,
         json_schema_extra={
-            "prompt": "Enter your Aster Perpetual main wallet address (user)",
+            "prompt": "Enter your Aster Perpetual user wallet address",
             "is_secure": True, "is_connect_key": True, "prompt_on_new": True}
     )
-    aster_perpetual_signer_wallet: SecretStr = Field(
+    aster_perpetual_api_key: SecretStr = Field(
         default=...,
         json_schema_extra={
-            "prompt": "Enter your Aster Perpetual API wallet address (signer)",
+            "prompt": "Enter your Aster Perpetual API Key",
             "is_secure": True, "is_connect_key": True, "prompt_on_new": True}
     )
-    aster_perpetual_private_key: SecretStr = Field(
+    aster_perpetual_secret_key: SecretStr = Field(
         default=...,
         json_schema_extra={
-            "prompt": "Enter your Aster Perpetual signer wallet private key",
+            "prompt": "Enter your Aster Perpetual Secret Key (HMAC secret for v1, private key for v3)",
             "is_secure": True, "is_connect_key": True, "prompt_on_new": True}
     )
 
@@ -62,10 +70,10 @@ class AsterPerpetualTestnetConfigMap(BaseConnectorConfigMap):
             "is_secure": True, "is_connect_key": True, "prompt_on_new": True}
     )
     aster_perpetual_testnet_signer_wallet: SecretStr = Field(
-        default=...,
+        default="",
         json_schema_extra={
-            "prompt": "Enter your Aster Perpetual testnet API wallet address (signer)",
-            "is_secure": True, "is_connect_key": True, "prompt_on_new": True}
+            "prompt": "Enter your Aster Perpetual testnet API wallet address (signer) [auto-derived from private key]",
+            "is_secure": True, "is_connect_key": False, "prompt_on_new": False}
     )
     aster_perpetual_testnet_private_key: SecretStr = Field(
         default=...,
