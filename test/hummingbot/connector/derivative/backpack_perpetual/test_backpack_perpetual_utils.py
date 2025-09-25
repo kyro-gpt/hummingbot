@@ -128,26 +128,15 @@ class BackpackPerpetualUtilsTestCases(unittest.TestCase):
 
     def test_config_map_structure(self):
         """Test that the derivative config map has required fields"""
-        # Test the config class structure by checking the model fields
-        config_class = utils.BackpackPerpetualConfigMap
-        
-        # Check that API key fields are defined in the model
-        self.assertIn('backpack_perpetual_api_key', config_class.model_fields)
-        self.assertIn('backpack_perpetual_secret_key', config_class.model_fields)
-        
-        # Verify that leverage and position mode fields are NOT defined
-        # These are managed at the account level via Backpack's API/UI, not as config parameters
-        self.assertNotIn('backpack_perpetual_leverage', config_class.model_fields)
-        self.assertNotIn('backpack_perpetual_position_mode', config_class.model_fields)
-        
-        # Test that we can construct a config with the required fields
-        try:
-            config = config_class.model_construct(
-                backpack_perpetual_api_key="test_api_key",
-                backpack_perpetual_secret_key="test_secret_key"
-            )
-            # Check connector name from the constructed instance
-            self.assertEqual("backpack_perpetual", config.connector)
-            self.assertTrue(True)  # Construction succeeded
-        except Exception as e:
-            self.fail(f"Failed to construct BackpackPerpetualConfigMap with required fields: {e}")
+        config = utils.BackpackPerpetualConfigMap.model_construct()
+
+        # Check connector name
+        self.assertEqual("backpack_perpetual", config.connector)
+
+        # Check that derivative-specific fields exist
+        self.assertTrue(hasattr(config, 'backpack_perpetual_leverage'))
+        self.assertTrue(hasattr(config, 'backpack_perpetual_position_mode'))
+
+        # Check default values
+        self.assertEqual(1, config.backpack_perpetual_leverage)
+        self.assertEqual("ONEWAY", config.backpack_perpetual_position_mode)

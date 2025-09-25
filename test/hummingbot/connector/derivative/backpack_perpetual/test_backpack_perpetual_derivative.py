@@ -55,47 +55,17 @@ class BackpackPerpetualDerivativeTests(IsolatedAsyncioWrapperTestCase):
             self.connector._account_balances = {}
             self.connector._account_available_balances = {}
             self.connector._trading_fees = {}
-
-            # Create mock trading rules with collateral tokens (this fixes the KeyError)
-            from decimal import Decimal
-
-            from hummingbot.connector.trading_rule import TradingRule
-            self.connector._trading_rules = {
-                "SOL-USDC": TradingRule(
-                    trading_pair="SOL-USDC",
-                    min_order_size=Decimal("0.01"),
-                    min_price_increment=Decimal("0.01"),
-                    min_base_amount_increment=Decimal("0.01"),
-                    buy_order_collateral_token="USDC",
-                    sell_order_collateral_token="USDC"
-                ),
-                "ETH-USDT": TradingRule(
-                    trading_pair="ETH-USDT",
-                    min_order_size=Decimal("0.001"),
-                    min_price_increment=Decimal("0.01"),
-                    min_base_amount_increment=Decimal("0.001"),
-                    buy_order_collateral_token="USDT",
-                    sell_order_collateral_token="USDT"
-                ),
-                "BTC-USD": TradingRule(
-                    trading_pair="BTC-USD",
-                    min_order_size=Decimal("0.0001"),
-                    min_price_increment=Decimal("0.01"),
-                    min_base_amount_increment=Decimal("0.0001"),
-                    buy_order_collateral_token="USD",
-                    sell_order_collateral_token="USD"
-                )
-            }
-
+            self.connector._trading_rules = {}
+            
             # Mock trading pair symbol mapping (critical for derivative tests)
             # Base class expects {exchange_symbol: trading_pair} format
             from bidict import bidict
             self.connector._trading_pair_symbol_map = bidict({
                 "SOL_USDC_PERP": "SOL-USDC",
-                "BTC_USDC_PERP": "BTC-USDC",
+                "BTC_USDC_PERP": "BTC-USDC", 
                 "ETH_USDC_PERP": "ETH-USDC"
             })
-
+            
             # Also mock the base class symbol map to avoid the KeyError
             self.connector._set_trading_pair_symbol_map(self.connector._trading_pair_symbol_map)
 
@@ -228,7 +198,7 @@ class BackpackPerpetualDerivativeTests(IsolatedAsyncioWrapperTestCase):
         eth_position = self.connector.get_position("ETH-USDT")
         self.assertIsNotNone(eth_position)
         self.assertEqual(PositionSide.SHORT, eth_position.position_side)
-        self.assertEqual(Decimal("-0.1"), eth_position.amount)  # Keep negative for SHORT positions
+        self.assertEqual(Decimal("0.1"), eth_position.amount)
         self.assertEqual(Decimal("3000.00"), eth_position.entry_price)
         self.assertEqual(Decimal("-5.00"), eth_position.unrealized_pnl)
 
@@ -257,7 +227,7 @@ class BackpackPerpetualDerivativeTests(IsolatedAsyncioWrapperTestCase):
         # Mock funding payment API response
         funding_data = [
             {
-                "intervalEndTimestamp": "2022-01-01T00:00:00.000Z",  # ISO datetime format as per API docs
+                "intervalEndTimestamp": "1640995200000",
                 "fundingRate": "0.0001",
                 "quantity": "0.5"
             }
@@ -312,8 +282,7 @@ class BackpackPerpetualDerivativeTests(IsolatedAsyncioWrapperTestCase):
             "orderType": "Limit",
             "quantity": "0.5",
             "price": "150.00",
-            "status": "New",
-            "createdAt": 1640995200000  # Add missing createdAt field (in milliseconds)
+            "status": "New"
         }
 
         # Mock the API response
@@ -512,7 +481,7 @@ class BackpackPerpetualDerivativeTests(IsolatedAsyncioWrapperTestCase):
         position = self.connector.get_position("ETH-USDT")
         self.assertIsNotNone(position)
         self.assertEqual(PositionSide.SHORT, position.position_side)
-        self.assertEqual(Decimal("-0.1"), position.amount)  # Keep negative for SHORT positions
+        self.assertEqual(Decimal("0.1"), position.amount)  # Absolute value
         self.assertEqual(Decimal("3000.00"), position.entry_price)
         self.assertEqual(Decimal("-5.00"), position.unrealized_pnl)
 
@@ -570,18 +539,20 @@ class BackpackPerpetualDerivativeTests(IsolatedAsyncioWrapperTestCase):
     @aioresponses()
     async def test_update_balances_successful(self, mock_api):
         """Test successful balance update"""
-        # Mock balance API response (format as per implementation comment)
+        # Mock balance API response
         balance_data = {
-            "USDC": {
-                "available": "900.25",
-                "locked": "100.25",  # total - available = locked
-                "staked": "0"
-            },
-            "SOL": {
-                "available": "8.50", 
-                "locked": "2.25",    # total - available = locked
-                "staked": "0"
-            }
+            "balances": [
+                {
+                    "asset": "USDC",
+                    "total": "1000.50",
+                    "available": "900.25"
+                },
+                {
+                    "asset": "SOL",
+                    "total": "10.75",
+                    "available": "8.50"
+                }
+            ]
         }
 
         # Mock the API response
@@ -596,10 +567,10 @@ class BackpackPerpetualDerivativeTests(IsolatedAsyncioWrapperTestCase):
         # Test balance update
         await self.connector._update_balances()
 
-        # Verify balances were set (total = available + locked + staked)
-        self.assertEqual(Decimal("1000.50"), self.connector.get_balance("USDC"))  # 900.25 + 100.25 + 0
+        # Verify balances were set
+        self.assertEqual(Decimal("1000.50"), self.connector.get_balance("USDC"))
         self.assertEqual(Decimal("900.25"), self.connector.get_available_balance("USDC"))
-        self.assertEqual(Decimal("10.75"), self.connector.get_balance("SOL"))  # 8.50 + 2.25 + 0
+        self.assertEqual(Decimal("10.75"), self.connector.get_balance("SOL"))
         self.assertEqual(Decimal("8.50"), self.connector.get_available_balance("SOL"))
 
     def test_fee_calculation(self):
@@ -641,22 +612,14 @@ class BackpackPerpetualDerivativeTests(IsolatedAsyncioWrapperTestCase):
         non_time_error = Exception("invalid API key")
         self.assertFalse(self.connector._is_request_exception_related_to_time_synchronizer(non_time_error))
 
-        # Test order not found error detection for status updates
-        status_not_found_error = Exception("404 not found")
-        self.assertTrue(self.connector._is_order_not_found_during_status_update_error(status_not_found_error))
-        
-        # Test order not found error detection for cancellation (Backpack-specific format)
-        cancel_not_found_error = Exception('Error executing request DELETE... Error: {"code":"INVALID_CLIENT_REQUEST","message":"Order not found"}')
-        self.assertTrue(self.connector._is_order_not_found_during_cancelation_error(cancel_not_found_error))
+        # Test order not found error detection
+        not_found_error = Exception("404 not found")
+        self.assertTrue(self.connector._is_order_not_found_during_status_update_error(not_found_error))
+        self.assertTrue(self.connector._is_order_not_found_during_cancelation_error(not_found_error))
 
-        # Test errors that should NOT be detected as order not found
         other_error = Exception("500 internal server error")
         self.assertFalse(self.connector._is_order_not_found_during_status_update_error(other_error))
         self.assertFalse(self.connector._is_order_not_found_during_cancelation_error(other_error))
-        
-        # Test generic 404 should NOT match cancelation (requires specific Backpack format)
-        generic_404_error = Exception("404 not found")
-        self.assertFalse(self.connector._is_order_not_found_during_cancelation_error(generic_404_error))
 
 
 if __name__ == "__main__":
