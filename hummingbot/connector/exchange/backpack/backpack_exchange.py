@@ -758,7 +758,15 @@ class BackpackExchange(ExchangePyBase):
                 try:
                     # Extract fill information
                     trade_id = str(fill.get("id", ""))
-                    fill_timestamp = float(fill.get("timestamp", self._time_synchronizer.time() * 1000)) / 1000.0
+                    # Handle Backpack's ISO timestamp format
+                    timestamp_str = fill.get("timestamp")
+                    if timestamp_str and isinstance(timestamp_str, str) and "T" in timestamp_str:
+                        # Parse ISO datetime string to timestamp
+                        from dateutil.parser import parse
+                        fill_timestamp = parse(timestamp_str).timestamp()
+                    else:
+                        # Fallback for numeric timestamps
+                        fill_timestamp = float(timestamp_str or self._time_synchronizer.time() * 1000) / 1000.0
                     fill_price = Decimal(str(fill.get("price", "0")))
                     fill_quantity = Decimal(str(fill.get("quantity", "0")))
 
@@ -975,8 +983,12 @@ class BackpackExchange(ExchangePyBase):
                 return
 
             # Process trade events (fills)
-            if event_type in ["orderFilled", "orderAccepted"] and event_data.get("t") is not None:
+            self.logger().info(f"[DEBUG] Order event - Type: {event_type}, Status: {order_status}, Has trade ID: {event_data.get('t') is not None}")
+            if event_type == "orderFill" and event_data.get("t") is not None:
+                self.logger().info(f"[DEBUG] Calling _process_trade_fill for {client_order_id}")
                 await self._process_trade_fill(event_data, tracked_order)
+            else:
+                self.logger().info(f"[DEBUG] NOT calling _process_trade_fill - event_type: {event_type}, has 't' field: {event_data.get('t') is not None}")
 
             # Process order status updates
             if order_status in CONSTANTS.ORDER_STATE:
@@ -999,12 +1011,17 @@ class BackpackExchange(ExchangePyBase):
     async def _process_trade_fill(self, event_data: Dict[str, Any], tracked_order: InFlightOrder):
         """Process trade fill events from order updates."""
         try:
+            # Debug: Log what fields are actually available in WebSocket event
+            self.logger().info(f"[DEBUG] Processing trade fill for {tracked_order.client_order_id}, event_data keys: {list(event_data.keys())}")
+            self.logger().info(f"[DEBUG] Event data: {event_data}")
+
             trade_id = str(event_data.get("t", ""))
             if not trade_id or trade_id == "null":
+                self.logger().info(f"[DEBUG] No trade ID found in WebSocket event (expected field 't')")
                 return  # No actual trade occurred
 
-            fill_price = Decimal(str(event_data.get("p", "0")))
-            last_fill_qty = Decimal(str(event_data.get("z", "0")))
+            fill_price = Decimal(str(event_data.get("L", "0")))
+            last_fill_qty = Decimal(str(event_data.get("l", "0")))
 
             if last_fill_qty == 0:
                 return  # No fill quantity

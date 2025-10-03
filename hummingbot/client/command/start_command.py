@@ -115,6 +115,9 @@ class StartCommand(GatewayChainApiManager):
             if self.trading_core.is_script_strategy(self.trading_core.strategy_name):
                 if self.strategy_file_name and self.strategy_file_name != self.trading_core.strategy_name:
                     strategy_config = self.strategy_file_name
+            else:
+                # For regular strategies, pass the imported config map
+                strategy_config = self.strategy_config_map
 
             success = await self.trading_core.start_strategy(
                 self.trading_core.strategy_name,

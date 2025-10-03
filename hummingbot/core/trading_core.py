@@ -477,6 +477,16 @@ class TradingCore:
 
     async def _initialize_regular_strategy(self):
         """Initialize a regular strategy using starter file."""
+        # Load strategy config map if we have a config source
+        if self._config_source and not self.strategy_config_map:
+            from pathlib import Path
+            from hummingbot.client.config.config_helpers import load_strategy_config_map_from_file
+            config_path = Path(self._config_source)
+            self.strategy_config_map = await load_strategy_config_map_from_file(config_path)
+        elif self._config_data and not self.strategy_config_map:
+            from hummingbot.client.config.config_helpers import get_strategy_config_map
+            self.strategy_config_map = get_strategy_config_map(self.strategy_name)
+
         start_strategy_func: Callable = get_strategy_starter_file(self.strategy_name)
         start_strategy_func(self)
 

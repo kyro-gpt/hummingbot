@@ -11,7 +11,7 @@ from hummingbot.strategy.market_trading_pair_tuple import MarketTradingPairTuple
 
 def start(self):
     try:
-        c_map = self.strategy_config_map
+        c_map = self.strategy_config_map.hb_config
         exchange = c_map.exchange
         raw_trading_pair = c_map.market
 

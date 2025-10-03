@@ -198,14 +198,14 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
 
     @property
     def order_levels(self) -> int:
-        if self._config_map.order_levels_mode.title == MultiOrderLevelModel.model_config["title"]:
+        if self._config_map.order_levels_mode.model_config["title"] == MultiOrderLevelModel.model_config["title"]:
             return self._config_map.order_levels_mode.order_levels
         else:
             return 0
 
     @property
     def level_distances(self) -> int:
-        if self._config_map.order_levels_mode.title == MultiOrderLevelModel.model_config["title"]:
+        if self._config_map.order_levels_mode.model_config["title"] == MultiOrderLevelModel.model_config["title"]:
             return self._config_map.order_levels_mode.level_distances
         else:
             return 0
@@ -356,7 +356,7 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
 
     def get_config_map_execution_mode(self):
         try:
-            execution_mode = self._config_map.execution_timeframe_mode.title
+            execution_mode = self._config_map.execution_timeframe_mode.model_config["title"]
             execution_timeframe = self._config_map.execution_timeframe_mode.model_config["title"]
             if execution_mode == FromDateToDateModel.model_config["title"]:
                 start_time = self._config_map.execution_timeframe_mode.start_datetime
@@ -383,7 +383,7 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
             pass
 
     def get_config_map_hanging_orders(self):
-        if self._config_map.hanging_orders_mode.title == TrackHangingOrdersModel.model_config['title']:
+        if self._config_map.hanging_orders_mode.model_config["title"] == TrackHangingOrdersModel.model_config['title']:
             hanging_orders_enabled = True
             hanging_orders_cancel_pct = self._config_map.hanging_orders_mode.hanging_orders_cancel_pct
         else:
