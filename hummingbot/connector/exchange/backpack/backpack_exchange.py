@@ -146,24 +146,6 @@ class BackpackExchange(ExchangePyBase):
         """Returns the list of supported order types."""
         return CONSTANTS.SUPPORTED_ORDER_TYPES
 
-    def _is_order_not_found_during_status_update_error(self, status_update_exception: Exception) -> bool:
-        """
-        Returns True if the exception indicates that the order was not found during status update.
-
-        Args:
-            status_update_exception: Exception raised during order status update
-
-        Returns:
-            True if the order was not found, False otherwise
-        """
-        error_description = str(status_update_exception)
-        # Check for typical 404 error patterns from Backpack
-        is_not_found = (
-            "404" in error_description or
-            "Order not found" in error_description or
-            "not found" in error_description.lower()
-        )
-        return is_not_found
 
     def _is_order_not_found_during_cancelation_error(self, cancelation_exception: Exception) -> bool:
         """
@@ -195,10 +177,11 @@ class BackpackExchange(ExchangePyBase):
     def _is_order_not_found_during_status_update_error(self, status_update_exception: Exception) -> bool:
         """Check if the exception indicates an order was not found during status update."""
         error_description = str(status_update_exception)
-        # Check for typical error patterns from Backpack that indicate order not found
+        # For Backpack, 404 means order not found (could be filled/cancelled and removed from active orders)
+        # This is expected behavior, not an error that should cause orders to be marked as lost
         is_not_found = (
-            "404" in error_description or  # Not Found
-            "401" in error_description or  # Unauthorized (may indicate order doesn't exist)
+            "404" in error_description or  # Not Found - expected for filled/cancelled orders
+            "RESOURCE_NOT_FOUND" in error_description or  # Backpack's specific error code
             "Order not found" in error_description or
             "not found" in error_description.lower()
         )
@@ -983,12 +966,8 @@ class BackpackExchange(ExchangePyBase):
                 return
 
             # Process trade events (fills)
-            self.logger().info(f"[DEBUG] Order event - Type: {event_type}, Status: {order_status}, Has trade ID: {event_data.get('t') is not None}")
             if event_type == "orderFill" and event_data.get("t") is not None:
-                self.logger().info(f"[DEBUG] Calling _process_trade_fill for {client_order_id}")
                 await self._process_trade_fill(event_data, tracked_order)
-            else:
-                self.logger().info(f"[DEBUG] NOT calling _process_trade_fill - event_type: {event_type}, has 't' field: {event_data.get('t') is not None}")
 
             # Process order status updates
             if order_status in CONSTANTS.ORDER_STATE:
@@ -1011,13 +990,8 @@ class BackpackExchange(ExchangePyBase):
     async def _process_trade_fill(self, event_data: Dict[str, Any], tracked_order: InFlightOrder):
         """Process trade fill events from order updates."""
         try:
-            # Debug: Log what fields are actually available in WebSocket event
-            self.logger().info(f"[DEBUG] Processing trade fill for {tracked_order.client_order_id}, event_data keys: {list(event_data.keys())}")
-            self.logger().info(f"[DEBUG] Event data: {event_data}")
-
             trade_id = str(event_data.get("t", ""))
             if not trade_id or trade_id == "null":
-                self.logger().info(f"[DEBUG] No trade ID found in WebSocket event (expected field 't')")
                 return  # No actual trade occurred
 
             fill_price = Decimal(str(event_data.get("L", "0")))
