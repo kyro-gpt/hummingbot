@@ -207,7 +207,16 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
 
     def _is_order_not_found_during_status_update_error(self, status_update_exception: Exception) -> bool:
         """Check if status update exception indicates order not found"""
-        return "404" in str(status_update_exception) or "not found" in str(status_update_exception).lower()
+        error_description = str(status_update_exception)
+        # For Backpack, 404 means order not found (could be filled/cancelled and removed from active orders)
+        # This is expected behavior, not an error that should cause orders to be marked as lost
+        is_not_found = (
+            "404" in error_description or  # Not Found - expected for filled/cancelled orders
+            "RESOURCE_NOT_FOUND" in error_description or  # Backpack's specific error code
+            "Order not found" in error_description or
+            "not found" in error_description.lower()
+        )
+        return is_not_found
 
     def _create_web_assistants_factory(self) -> WebAssistantsFactory:
         """Create web assistants factory with authentication"""
@@ -449,7 +458,7 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
             )
 
             # Process trade fills if applicable
-            if event_type == "orderFilled" or order_state == "Filled":
+            if event_type == "orderFill" or order_state == "Filled":
                 await self._process_trade_fill_event(event_data, tracked_order)
 
             # Update order tracker
@@ -527,8 +536,8 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
         try:
             # Extract trade information
             trade_id = event_data.get("t", "")
-            fill_quantity = Decimal(str(event_data.get("z", "0")))  # Last filled quantity
-            fill_price = Decimal(str(event_data.get("p", "0")))  # Price
+            fill_quantity = Decimal(str(event_data.get("l", "0")))  # Last filled quantity
+            fill_price = Decimal(str(event_data.get("L", "0")))  # Price
             fee_amount = Decimal(str(event_data.get("n", "0")))  # Fee amount
             fee_asset = event_data.get("N", "")  # Fee symbol
 
