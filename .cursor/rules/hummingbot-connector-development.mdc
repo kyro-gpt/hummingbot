@@ -21,6 +21,7 @@ description: Hummingbot connector development workflow and critical guidelines
 2. **Test Planning**: Design test strategy for REST and WebSocket before coding
 3. **TDD Implementation**: Write tests first, then implement features
 4. **Milestone Testing**: Stop and test before moving to next phase
+5. **External Dependency**: For external dependencies like connector SDK, most of them is not well maintained. We would prefer copy files than taking pythong package dependency.
 
 ## Project Structure
 - Spot: `hummingbot/connector/exchange/{connector_name}/`
