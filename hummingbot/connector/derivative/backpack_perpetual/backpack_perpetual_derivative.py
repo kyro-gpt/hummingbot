@@ -268,6 +268,7 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
         quote_currency: str,
         order_type: OrderType,
         order_side: TradeType,
+        position_action: PositionAction,
         amount: Decimal,
         price: Decimal = Decimal("NaN"),
         is_maker: Optional[bool] = None,
@@ -996,7 +997,20 @@ class BackpackPerpetualDerivative(PerpetualDerivativePyBase):
                     fill_price = Decimal(str(fill_data.get("price", "0")))
                     fee_amount = Decimal(str(fill_data.get("fee", "0")))
                     fee_asset = fill_data.get("feeSymbol", "")
-                    fill_timestamp = int(fill_data.get("timestamp", 0)) / 1000  # Convert to seconds
+                    # Handle both numeric and ISO timestamp formats
+                    timestamp_raw = fill_data.get("timestamp", 0)
+                    if isinstance(timestamp_raw, str):
+                        # Parse ISO format timestamp like '2025-10-03T07:09:47.801'
+                        from datetime import datetime
+                        try:
+                            dt = datetime.fromisoformat(timestamp_raw.replace('Z', '+00:00'))
+                            fill_timestamp = dt.timestamp()
+                        except ValueError:
+                            self.logger().error(f"Failed to parse timestamp: {timestamp_raw}")
+                            fill_timestamp = 0
+                    else:
+                        # Handle numeric timestamp (milliseconds)
+                        fill_timestamp = int(timestamp_raw) / 1000
 
                     trade_update = TradeUpdate(
                         trade_id=trade_id,

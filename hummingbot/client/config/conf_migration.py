@@ -27,6 +27,9 @@ from hummingbot.client.settings import CLIENT_CONFIG_PATH, CONF_DIR_PATH, STRATE
 from hummingbot.strategy.avellaneda_market_making.avellaneda_market_making_config_map_pydantic import (
     AvellanedaMarketMakingConfigMap,
 )
+from hummingbot.strategy.avellaneda_perpetual_market_making.avellaneda_perpetual_market_making_config_map_pydantic import (
+    AvellanedaPerpetualMarketMakingConfigMap,
+)
 from hummingbot.strategy.cross_exchange_market_making.cross_exchange_market_making_config_map_pydantic import (
     CrossExchangeMarketMakingConfigMap,
 )
