@@ -79,8 +79,8 @@ class LighterPerpetualWebUtilsTests(TestCase):
 
     def test_format_trading_pair_to_market_id_known_pair(self):
         """Test trading pair to market ID conversion for known pairs"""
-        # Test with BTC-USDC which should map to 0
-        result = format_trading_pair_to_market_id("BTC-USDC")
+        # Test with ETH-USDC which should map to 0 (confirmed from mainnet API)
+        result = format_trading_pair_to_market_id("ETH-USDC")
         self.assertEqual(result, 0)
 
     def test_format_trading_pair_to_market_id_unknown_pair(self):

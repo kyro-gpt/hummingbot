@@ -55,16 +55,17 @@ class LighterPerpetualAPIOrderBookDataSource(PerpetualAPIOrderBookDataSource):
         market_id = web_utils.format_trading_pair_to_market_id(trading_pair)
 
         # Get funding data from /api/v1/fundings endpoint
-        # Based on API testing: requires resolution, count_back, AND start_timestamp
+        # Requires: market_id, resolution, count_back, start_timestamp, end_timestamp
         import time
         current_time = int(time.time())
         start_timestamp = current_time - (24 * 3600)  # Last 24 hours
         
         params = {
             "market_id": market_id,
-            "resolution": "1h",  # API only accepts "1h" or "1d"
-            "count_back": 24,  # Number of data points
-            "start_timestamp": start_timestamp  # Still required
+            "resolution": "1h",  # API accepts "1h" or "1d"
+            "count_back": 24,  # Number of data points to return
+            "start_timestamp": start_timestamp,
+            "end_timestamp": current_time
         }
         response = await self._connector._api_get(
             path_url=CONSTANTS.FUNDINGS_PATH_URL,
@@ -78,11 +79,12 @@ class LighterPerpetualAPIOrderBookDataSource(PerpetualAPIOrderBookDataSource):
             params=orderbook_params
         )
 
-        # Extract funding info from response
+        # Extract funding rate from response
+        # Response format: {"fundings": [{"timestamp": X, "rate": "0.0012", "value": "0.05", "direction": "long"}]}
         funding_rate = Decimal("0")  # Default if no funding data
         if response.get("fundings") and len(response["fundings"]) > 0:
-            latest_funding = response["fundings"][0]  # Most recent funding
-            funding_rate = Decimal(str(latest_funding.get("funding_rate", "0")))
+            latest_funding = response["fundings"][-1]  # Most recent funding (last in array)
+            funding_rate = Decimal(str(latest_funding.get("rate", "0")))  # Use "rate" field, not "funding_rate"
 
         # Extract prices from orderbook details
         mark_price = Decimal("0")

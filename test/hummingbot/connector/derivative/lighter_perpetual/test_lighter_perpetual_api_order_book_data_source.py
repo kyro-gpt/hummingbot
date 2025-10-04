@@ -92,13 +92,16 @@ class LighterPerpetualAPIOrderBookDataSourceTests(unittest.TestCase):
         """Test getting funding information"""
         mock_format_pair.return_value = 1
 
-        # Mock funding response
+        # Mock funding response (updated to match real API format)
         funding_response = {
             "code": 200,
+            "resolution": "1h",
             "fundings": [
                 {
-                    "funding_rate": "0.0001",
-                    "timestamp": 1640995200
+                    "timestamp": 1640995200,
+                    "value": "0.05",
+                    "rate": "0.0001",  # Real API uses "rate" not "funding_rate"
+                    "direction": "long"
                 }
             ]
         }
