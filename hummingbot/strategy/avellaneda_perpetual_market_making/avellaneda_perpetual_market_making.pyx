@@ -466,18 +466,19 @@ cdef class AvellanedaPerpetualMarketMakingStrategy(StrategyBase):
     def pure_mm_assets_df(self, to_show_current_pct: bool) -> pd.DataFrame:
         market, trading_pair, base_asset, quote_asset = self._market_info
         price = self._price_delegate.get_price_by_type(PriceType.MidPrice)
-        base_balance = float(market.get_balance(base_asset))
+        # PERPETUAL DIFFERENCE: Show position data instead of spot balances
+        current_position = float(self.get_current_position_amount())
         quote_balance = float(market.get_balance(quote_asset))
-        available_base_balance = float(market.get_available_balance(base_asset))
         available_quote_balance = float(market.get_available_balance(quote_asset))
-        base_value = base_balance * float(price)
+        # Position value (can be negative for shorts)
+        base_value = current_position * float(price)
         total_in_quote = base_value + quote_balance
         base_ratio = base_value / total_in_quote if total_in_quote > 0 else 0
         quote_ratio = quote_balance / total_in_quote if total_in_quote > 0 else 0
         data = [
-            ["", base_asset, quote_asset],
-            ["Total Balance", round(base_balance, 4), round(quote_balance, 4)],
-            ["Available Balance", round(available_base_balance, 4), round(available_quote_balance, 4)],
+            ["", f"{base_asset} Position", quote_asset],
+            ["Current Amount", round(current_position, 4), round(quote_balance, 4)],
+            ["Available Amount", "N/A", round(available_quote_balance, 4)],
             [f"Current Value ({quote_asset})", round(base_value, 4), round(quote_balance, 4)]
         ]
         if to_show_current_pct:
@@ -703,9 +704,9 @@ cdef class AvellanedaPerpetualMarketMakingStrategy(StrategyBase):
         self._avg_vol.add_sample(price)
         self._trading_intensity.calculate(timestamp)
         # Calculate adjustment factor to have 0.01% of inventory resolution
-        base_balance = market.get_balance(base_asset)
+        # PERPETUAL DIFFERENCE: Use trading scale (collateral capacity) for adjustment factor
         quote_balance = market.get_balance(quote_asset)
-        inventory_in_base = quote_balance / price + base_balance
+        trading_scale_in_base = quote_balance / price  # Always positive
 
     def collect_market_variables(self, timestamp: float):
         self.c_collect_market_variables(timestamp)
@@ -752,7 +753,13 @@ cdef class AvellanedaPerpetualMarketMakingStrategy(StrategyBase):
             return
 
         q_target = Decimal(str(self.c_calculate_target_inventory()))
-        q = (market.get_balance(self.base_asset) - q_target) / (inventory)
+        # PERPETUAL DIFFERENCE: Calculate position deviation from target
+        # current_position: can be negative (short), positive (long), or zero
+        # q_target: target position based on inventory_target_base_pct
+        # inventory: trading scale (always positive)
+        # q: deviation ratio (-1 = max short, 0 = at target, +1 = max long)
+        current_position = self.get_current_position_amount()
+        q = (current_position - q_target) / (inventory)
         # Volatility has to be in absolute values (prices) because in calculation of reservation price it's not multiplied by the current price, therefore
         # it can't be a percentage. The result of the multiplication has to be an absolute price value because it's being subtracted from the current price
         vol = self.get_volatility()
@@ -818,18 +825,18 @@ cdef class AvellanedaPerpetualMarketMakingStrategy(StrategyBase):
             object inventory_value
             object target_inventory_value
 
+        # PERPETUAL DIFFERENCE: Target position based on trading scale, not account value
         price = self.get_price()
-        base_asset_amount = market.get_balance(base_asset)
+
+        # Get trading scale (collateral capacity)
         quote_asset_amount = market.get_balance(quote_asset)
-        # Base asset value in quote asset prices
-        base_value = base_asset_amount * price
-        # Total inventory value in quote asset prices
-        inventory_value = base_value + quote_asset_amount
-        # Target base asset value in quote asset prices
-        target_inventory_value = inventory_value * self.inventory_target_base
-        # Target base asset amount
-        target_inventory_amount = target_inventory_value / price
-        return market.c_quantize_order_amount(trading_pair, Decimal(str(target_inventory_amount)))
+        trading_scale_base = quote_asset_amount / price
+
+        # Target position as percentage of trading scale
+        # inventory_target_base_pct: 0% = neutral (flat), 50% = long bias, 100% = max long
+        target_position_amount = trading_scale_base * self.inventory_target_base
+
+        return market.c_quantize_order_amount(trading_pair, Decimal(str(target_position_amount)))
 
     def calculate_target_inventory(self) -> Decimal:
         return self.c_calculate_target_inventory()
@@ -845,16 +852,17 @@ cdef class AvellanedaPerpetualMarketMakingStrategy(StrategyBase):
             object inventory_value_quote
             object inventory_value_base
 
+        # PERPETUAL DIFFERENCE: Trading scale based on collateral capacity, not current position
         price = self.get_price()
-        base_asset_amount = market.get_balance(base_asset)
+
+        # Get margin/collateral balance - this represents our trading capacity
         quote_asset_amount = market.get_balance(quote_asset)
-        # Base asset value in quote asset prices
-        base_value = base_asset_amount * price
-        # Total inventory value in quote asset prices
-        inventory_value_quote = base_value + quote_asset_amount
-        # Total inventory value in base asset prices
-        inventory_value_base = inventory_value_quote / price
-        return inventory_value_base
+
+        # Trading scale = total collateral converted to base asset (always positive)
+        # This represents the "size" of our operation, regardless of current position
+        trading_scale_base = quote_asset_amount / price
+
+        return trading_scale_base
 
     def calculate_inventory(self) -> Decimal:
         return self.c_calculate_inventory()
@@ -1073,6 +1081,27 @@ cdef class AvellanedaPerpetualMarketMakingStrategy(StrategyBase):
         proposal.buys = [o for o in proposal.buys if o.size > 0]
         proposal.sells = [o for o in proposal.sells if o.size > 0]
 
+    def get_current_position_amount(self) -> Decimal:
+        """
+        PERPETUAL DIFFERENCE: Get current position amount instead of spot balance.
+        Returns: Positive for long positions, negative for short positions, 0 for no position
+        """
+        market = self._market_info.market
+        trading_pair = self._market_info.trading_pair
+        positions = market.account_positions
+
+        # Find position for our trading pair
+        for position_key, position in positions.items():
+            if position.trading_pair == trading_pair:
+                # Return signed amount (positive for long, negative for short)
+                from hummingbot.core.data_type.common import PositionSide
+                if position.position_side == PositionSide.LONG:
+                    return position.amount
+                elif position.position_side == PositionSide.SHORT:
+                    return -position.amount
+
+        return Decimal("0")  # No position
+
     # Compare the market price with the top bid and top ask price
     cdef c_apply_order_optimization(self, object proposal):
         cdef:
@@ -1144,7 +1173,10 @@ cdef class AvellanedaPerpetualMarketMakingStrategy(StrategyBase):
                 return
 
             q_target = Decimal(str(self.c_calculate_target_inventory()))
-            q = (market.get_balance(self.base_asset) - q_target) / (inventory)
+            # PERPETUAL DIFFERENCE: Calculate position deviation for order size adjustment
+            # Same logic as reservation price: q = deviation ratio from target
+            current_position = self.get_current_position_amount()
+            q = (current_position - q_target) / (inventory)
 
             if len(proposal.buys) > 0:
                 if q > 0:
@@ -1446,7 +1478,7 @@ cdef class AvellanedaPerpetualMarketMakingStrategy(StrategyBase):
                             self._optimal_ask,
                             (mid_price - (self._reservation_price - self._optimal_spread / 2)) / mid_price,
                             ((self._reservation_price + self._optimal_spread / 2) - mid_price) / mid_price,
-                            market.get_balance(self.base_asset),
+                            self.get_current_position_amount(),
                             self.c_calculate_target_inventory(),
                             time_left_fraction,
                             self._avg_vol.current_value,
