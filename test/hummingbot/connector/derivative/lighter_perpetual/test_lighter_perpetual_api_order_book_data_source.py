@@ -129,20 +129,18 @@ class LighterPerpetualAPIOrderBookDataSourceTests(unittest.TestCase):
         """Test requesting order book snapshot"""
         mock_format_pair.return_value = 1
 
+        # Updated to match orderBookOrders endpoint format
         expected_response = {
             "code": 200,
-            "order_book_details": [
-                {
-                    "market_id": 1,
-                    "bids": [
-                        {"price": "2999.50", "size": "0.1"},
-                        {"price": "2999.00", "size": "0.2"}
-                    ],
-                    "asks": [
-                        {"price": "3000.50", "size": "0.1"},
-                        {"price": "3001.00", "size": "0.2"}
-                    ]
-                }
+            "total_bids": 2,
+            "total_asks": 2,
+            "bids": [
+                {"price": "2999.50", "remaining_base_amount": "0.1", "order_id": "123"},
+                {"price": "2999.00", "remaining_base_amount": "0.2", "order_id": "124"}
+            ],
+            "asks": [
+                {"price": "3000.50", "remaining_base_amount": "0.1", "order_id": "125"},
+                {"price": "3001.00", "remaining_base_amount": "0.2", "order_id": "126"}
             ]
         }
 
@@ -154,8 +152,8 @@ class LighterPerpetualAPIOrderBookDataSourceTests(unittest.TestCase):
 
         self.assertEqual(result, expected_response)
         self.connector._api_get.assert_called_once_with(
-            path_url=CONSTANTS.ORDER_BOOK_DETAILS_PATH_URL,
-            params={"market_id": 1}
+            path_url=CONSTANTS.ORDER_BOOK_ORDERS_PATH_URL,
+            params={"market_id": 1, "limit": 100}
         )
 
     @patch("hummingbot.connector.derivative.lighter_perpetual.lighter_perpetual_web_utils.format_trading_pair_to_market_id")
@@ -163,20 +161,18 @@ class LighterPerpetualAPIOrderBookDataSourceTests(unittest.TestCase):
         """Test converting order book snapshot to OrderBookMessage"""
         mock_format_pair.return_value = 1
 
+        # Updated to match orderBookOrders endpoint format
         snapshot_response = {
             "code": 200,
-            "order_book_details": [
-                {
-                    "market_id": 1,
-                    "bids": [
-                        {"price": "2999.50", "size": "0.1"},
-                        {"price": "2999.00", "size": "0.2"}
-                    ],
-                    "asks": [
-                        {"price": "3000.50", "size": "0.1"},
-                        {"price": "3001.00", "size": "0.2"}
-                    ]
-                }
+            "total_bids": 2,
+            "total_asks": 2,
+            "bids": [
+                {"price": "2999.50", "remaining_base_amount": "0.1", "order_id": "123"},
+                {"price": "2999.00", "remaining_base_amount": "0.2", "order_id": "124"}
+            ],
+            "asks": [
+                {"price": "3000.50", "remaining_base_amount": "0.1", "order_id": "125"},
+                {"price": "3001.00", "remaining_base_amount": "0.2", "order_id": "126"}
             ]
         }
 
@@ -468,20 +464,18 @@ class LighterPerpetualAPIOrderBookDataSourceTests(unittest.TestCase):
         """Test getting new OrderBook instance"""
         mock_format_pair.return_value = 1
         
+        # Updated to match orderBookOrders endpoint format
         snapshot_response = {
             "code": 200,
-            "order_book_details": [
-                {
-                    "market_id": 1,
-                    "bids": [
-                        {"price": "2999.50", "size": "0.1"},
-                        {"price": "2999.00", "size": "0.2"}
-                    ],
-                    "asks": [
-                        {"price": "3000.50", "size": "0.1"},
-                        {"price": "3001.00", "size": "0.2"}
-                    ]
-                }
+            "total_bids": 2,
+            "total_asks": 2,
+            "bids": [
+                {"price": "2999.50", "remaining_base_amount": "0.1", "order_id": "123"},
+                {"price": "2999.00", "remaining_base_amount": "0.2", "order_id": "124"}
+            ],
+            "asks": [
+                {"price": "3000.50", "remaining_base_amount": "0.1", "order_id": "125"},
+                {"price": "3001.00", "remaining_base_amount": "0.2", "order_id": "126"}
             ]
         }
         

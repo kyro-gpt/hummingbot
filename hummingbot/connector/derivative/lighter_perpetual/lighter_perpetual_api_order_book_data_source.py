@@ -55,7 +55,17 @@ class LighterPerpetualAPIOrderBookDataSource(PerpetualAPIOrderBookDataSource):
         market_id = web_utils.format_trading_pair_to_market_id(trading_pair)
 
         # Get funding data from /api/v1/fundings endpoint
-        params = {"market_id": market_id}
+        # Based on API testing: requires resolution, count_back, AND start_timestamp
+        import time
+        current_time = int(time.time())
+        start_timestamp = current_time - (24 * 3600)  # Last 24 hours
+        
+        params = {
+            "market_id": market_id,
+            "resolution": "1h",  # API only accepts "1h" or "1d"
+            "count_back": 24,  # Number of data points
+            "start_timestamp": start_timestamp  # Still required
+        }
         response = await self._connector._api_get(
             path_url=CONSTANTS.FUNDINGS_PATH_URL,
             params=params
@@ -117,13 +127,17 @@ class LighterPerpetualAPIOrderBookDataSource(PerpetualAPIOrderBookDataSource):
     async def _request_order_book_snapshot(self, trading_pair: str) -> Dict[str, Any]:
         """
         Request order book snapshot from REST API
+        Based on API testing: use orderBookOrders endpoint with limit parameter
         """
         market_id = web_utils.format_trading_pair_to_market_id(trading_pair)
-
-        # Use orderBookDetails endpoint for order book snapshot
-        params = {"market_id": market_id}
+        
+        # Use orderBookOrders endpoint for actual order book data
+        params = {
+            "market_id": market_id,
+            "limit": 100  # API requires limit parameter
+        }
         data = await self._connector._api_get(
-            path_url=CONSTANTS.ORDER_BOOK_DETAILS_PATH_URL,
+            path_url=CONSTANTS.ORDER_BOOK_ORDERS_PATH_URL,  # Need to add this constant
             params=params
         )
         return data
@@ -134,22 +148,24 @@ class LighterPerpetualAPIOrderBookDataSource(PerpetualAPIOrderBookDataSource):
         """
         snapshot_response: Dict[str, Any] = await self._request_order_book_snapshot(trading_pair)
 
-        # Extract order book data from response
-        order_book_details = snapshot_response.get("order_book_details", [])
-        if not order_book_details:
+        # Extract order book data from orderBookOrders response
+        # Response format: {"bids": [...], "asks": [...], "total_bids": N, "total_asks": N}
+        bids_data = snapshot_response.get("bids", [])
+        asks_data = snapshot_response.get("asks", [])
+        
+        if not bids_data and not asks_data:
             raise ValueError(f"No order book data found for {trading_pair}")
 
-        order_book_data = order_book_details[0]
-
-        # Convert bids and asks from PriceLevel format
+        # Convert individual orders to price levels
+        # Each order: {"price": "4485.86", "remaining_base_amount": "0.0100", ...}
         bids = []
         asks = []
 
-        if "bids" in order_book_data:
-            bids = [[float(level["price"]), float(level["size"])] for level in order_book_data["bids"]]
+        if bids_data:
+            bids = [[float(order["price"]), float(order["remaining_base_amount"])] for order in bids_data]
 
-        if "asks" in order_book_data:
-            asks = [[float(level["price"]), float(level["size"])] for level in order_book_data["asks"]]
+        if asks_data:
+            asks = [[float(order["price"]), float(order["remaining_base_amount"])] for order in asks_data]
 
         # Use current timestamp as update_id since Lighter doesn't provide sequence numbers
         timestamp = int(time.time() * 1000)

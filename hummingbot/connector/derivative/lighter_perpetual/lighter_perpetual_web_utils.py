@@ -113,10 +113,11 @@ def format_trading_pair_to_market_id(trading_pair: str) -> int:
     # This will need to be implemented based on actual market mapping
     # For now, return a placeholder
     # TODO: Implement actual market ID mapping from API response
+    # Based on real API testing: ETH is market_id 0
     market_mapping = {
-        "BTC-USDC": 0,
-        "ETH-USDC": 1,
-        "SOL-USDC": 2,
+        "ETH-USDC": 0,  # Confirmed from mainnet API
+        "BTC-USDC": 1,  # TODO: Verify actual BTC market ID
+        "SOL-USDC": 2,  # TODO: Verify actual SOL market ID
         # Add more mappings as needed
     }
     return market_mapping.get(trading_pair, 0)

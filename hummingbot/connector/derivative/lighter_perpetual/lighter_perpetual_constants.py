@@ -32,6 +32,7 @@ INFO_PATH_URL = "/info"
 EXCHANGE_STATS_PATH_URL = "/exchangeStats"
 ORDER_BOOKS_PATH_URL = "/orderBooks"
 ORDER_BOOK_DETAILS_PATH_URL = "/orderBookDetails"
+ORDER_BOOK_ORDERS_PATH_URL = "/orderBookOrders"
 RECENT_TRADES_PATH_URL = "/recentTrades"
 TRADES_PATH_URL = "/trades"
 CANDLESTICKS_PATH_URL = "/candlesticks"
@@ -107,6 +108,7 @@ RATE_LIMITS = [
     RateLimit(limit_id=STATUS_PATH_URL, limit=100, time_interval=60),
     RateLimit(limit_id=ORDER_BOOKS_PATH_URL, limit=100, time_interval=60),
     RateLimit(limit_id=ORDER_BOOK_DETAILS_PATH_URL, limit=100, time_interval=60),
+    RateLimit(limit_id=ORDER_BOOK_ORDERS_PATH_URL, limit=100, time_interval=60),
     RateLimit(limit_id=RECENT_TRADES_PATH_URL, limit=100, time_interval=60),
     RateLimit(limit_id=TRADES_PATH_URL, limit=100, time_interval=60),
     RateLimit(limit_id=CANDLESTICKS_PATH_URL, limit=100, time_interval=60),
