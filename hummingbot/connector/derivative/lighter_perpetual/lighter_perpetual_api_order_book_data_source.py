@@ -8,7 +8,9 @@ import hummingbot.connector.derivative.lighter_perpetual.lighter_perpetual_const
 import hummingbot.connector.derivative.lighter_perpetual.lighter_perpetual_web_utils as web_utils
 from hummingbot.core.data_type.common import TradeType
 from hummingbot.core.data_type.funding_info import FundingInfo, FundingInfoUpdate
+from hummingbot.core.data_type.order_book import OrderBook
 from hummingbot.core.data_type.order_book_message import OrderBookMessage, OrderBookMessageType
+from hummingbot.core.data_type.order_book_row import OrderBookRow
 from hummingbot.core.data_type.perpetual_api_order_book_data_source import PerpetualAPIOrderBookDataSource
 from hummingbot.core.web_assistant.connections.data_types import WSJSONRequest
 from hummingbot.core.web_assistant.web_assistants_factory import WebAssistantsFactory
@@ -171,29 +173,24 @@ class LighterPerpetualAPIOrderBookDataSource(PerpetualAPIOrderBookDataSource):
 
     async def _subscribe_channels(self, ws: WSAssistant):
         """
-        Subscribe to order book and trade channels via WebSocket
-        Following Lighter SDK pattern: subscribe to order_books and accounts
+        Subscribe to order book channels via WebSocket
+        Following actual Lighter SDK protocol: individual channel subscriptions
         """
         try:
-            # Get market IDs for all trading pairs
-            market_ids = []
+            # Subscribe to order book updates for each trading pair
             for trading_pair in self._trading_pairs:
                 market_id = web_utils.format_trading_pair_to_market_id(trading_pair)
-                market_ids.append(market_id)
-
-            # Subscribe to order book updates for all market IDs
-            subscribe_payload = {
-                "method": "subscribe",
-                "params": {
-                    "order_books": market_ids,  # Subscribe to order book updates
-                    "accounts": []  # No account subscriptions for public data
+                
+                # Lighter WebSocket protocol: {"type": "subscribe", "channel": "order_book/{market_id}"}
+                subscribe_payload = {
+                    "type": "subscribe",
+                    "channel": f"order_book/{market_id}"
                 }
-            }
-            subscribe_request: WSJSONRequest = WSJSONRequest(payload=subscribe_payload)
-            await ws.send(subscribe_request)
-
-            self.logger().info(f"Subscribed to order book channels for markets: {market_ids}")
-
+                subscribe_request: WSJSONRequest = WSJSONRequest(payload=subscribe_payload)
+                await ws.send(subscribe_request)
+                
+                self.logger().info(f"Subscribed to order book channel: order_book/{market_id}")
+            
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -203,90 +200,101 @@ class LighterPerpetualAPIOrderBookDataSource(PerpetualAPIOrderBookDataSource):
     def _channel_originating_message(self, event_message: Dict[str, Any]) -> str:
         """
         Determine which channel a WebSocket message belongs to
+        Based on actual Lighter WebSocket protocol
         """
         channel = ""
         message_type = event_message.get("type", "")
-
-        if message_type == "update/order_book":
+        
+        if message_type in ["subscribed/order_book", "update/order_book"]:
             channel = self._snapshot_messages_queue_key
-        elif message_type == "update/trades":
+        elif message_type == "update/trades":  # Keep for future trade support
             channel = self._trade_messages_queue_key
-
+        
         return channel
 
     async def _parse_order_book_diff_message(self, raw_message: Dict[str, Any], message_queue: asyncio.Queue):
         """
         Parse WebSocket order book update message
+        Based on actual Lighter WebSocket protocol
         """
         try:
-            data = raw_message.get("data", {})
-            market_id = data.get("market_id")
-
-            if market_id is None:
+            # Extract market_id from channel (format: "order_book:1")
+            channel = raw_message.get("channel", "")
+            if not channel or ":" not in channel:
                 return
-
+            
+            market_id = int(channel.split(":")[1])
+            
             # Convert market_id back to trading pair
             trading_pair = web_utils.format_market_id_to_trading_pair(market_id)
-
-            # Extract bids and asks
+            
+            # Extract order book data from message
+            order_book_data = raw_message.get("order_book", {})
+            
+            # Extract bids and asks (format: [{"price": "X", "size": "Y"}])
             bids = []
             asks = []
-
-            if "bids" in data:
-                bids = [[float(level["price"]), float(level["size"])] for level in data["bids"]]
-
-            if "asks" in data:
-                asks = [[float(level["price"]), float(level["size"])] for level in data["asks"]]
-
+            
+            if "bids" in order_book_data:
+                bids = [[float(level["price"]), float(level["size"])] for level in order_book_data["bids"]]
+            
+            if "asks" in order_book_data:
+                asks = [[float(level["price"]), float(level["size"])] for level in order_book_data["asks"]]
+            
             timestamp = int(time.time() * 1000)
-
+            
             order_book_message: OrderBookMessage = OrderBookMessage(OrderBookMessageType.DIFF, {
                 "trading_pair": trading_pair,
                 "update_id": timestamp,
                 "bids": bids,
                 "asks": asks,
             }, timestamp=timestamp)
-
+            
             message_queue.put_nowait(order_book_message)
-
+            
         except Exception as e:
             self.logger().error(f"Error parsing order book diff message: {e}")
 
     async def _parse_order_book_snapshot_message(self, raw_message: Dict[str, Any], message_queue: asyncio.Queue):
         """
         Parse WebSocket order book snapshot message
+        Based on actual Lighter WebSocket protocol
         """
         try:
-            data = raw_message.get("data", {})
-            market_id = data.get("market_id")
-
-            if market_id is None:
+            # Extract market_id from channel (format: "order_book:1")
+            channel = raw_message.get("channel", "")
+            if not channel or ":" not in channel:
                 return
-
+            
+            market_id = int(channel.split(":")[1])
+            
             # Convert market_id back to trading pair
             trading_pair = web_utils.format_market_id_to_trading_pair(market_id)
-
-            # Extract bids and asks
+            
+            # Extract order book data from message
+            order_book_data = raw_message.get("order_book", {})
+            
+            # Extract bids and asks (format: [{"price": "X", "size": "Y"}])
             bids = []
             asks = []
-
-            if "bids" in data:
-                bids = [[float(level["price"]), float(level["size"])] for level in data["bids"]]
-
-            if "asks" in data:
-                asks = [[float(level["price"]), float(level["size"])] for level in data["asks"]]
-
+            
+            if "bids" in order_book_data:
+                bids = [[float(level["price"]), float(level["size"])] for level in order_book_data["bids"]]
+            
+            if "asks" in order_book_data:
+                asks = [[float(level["price"]), float(level["size"])] for level in order_book_data["asks"]]
+            
             timestamp = int(time.time() * 1000)
-
+            
             order_book_message: OrderBookMessage = OrderBookMessage(OrderBookMessageType.SNAPSHOT, {
                 "trading_pair": trading_pair,
                 "update_id": timestamp,
                 "bids": bids,
                 "asks": asks,
             }, timestamp=timestamp)
-
+            
             message_queue.put_nowait(order_book_message)
-
+            
         except Exception as e:
             self.logger().error(f"Error parsing order book snapshot message: {e}")
 
@@ -340,3 +348,46 @@ class LighterPerpetualAPIOrderBookDataSource(PerpetualAPIOrderBookDataSource):
         hours_since_epoch = current_time // 3600
         next_funding_hour = ((hours_since_epoch // 8) + 1) * 8
         return next_funding_hour * 3600
+
+    async def get_new_order_book(self, trading_pair: str) -> OrderBook:
+        """
+        Get a new OrderBook instance with current snapshot data
+        Required by base class OrderBookTrackerDataSource
+        """
+        snapshot_msg = await self._order_book_snapshot(trading_pair)
+        order_book = OrderBook()
+        
+        # Convert bid/ask data to OrderBookRow objects
+        bids = snapshot_msg.content.get("bids", [])
+        asks = snapshot_msg.content.get("asks", [])
+        
+        bid_rows = [OrderBookRow(price=Decimal(str(bid[0])), amount=Decimal(str(bid[1])), update_id=snapshot_msg.update_id) for bid in bids]
+        ask_rows = [OrderBookRow(price=Decimal(str(ask[0])), amount=Decimal(str(ask[1])), update_id=snapshot_msg.update_id) for ask in asks]
+        
+        # Apply snapshot to order book
+        order_book.apply_snapshot(bid_rows, ask_rows, snapshot_msg.update_id)
+        return order_book
+
+    async def _request_complete_funding_info(self, trading_pair: str) -> List:
+        """
+        Request complete funding information for a trading pair
+        Returns raw API response data (similar to Hyperliquid pattern)
+        """
+        market_id = web_utils.format_trading_pair_to_market_id(trading_pair)
+        
+        # Get funding data from /api/v1/fundings endpoint
+        params = {"market_id": market_id}
+        funding_response = await self._connector._api_get(
+            path_url=CONSTANTS.FUNDINGS_PATH_URL,
+            params=params
+        )
+        
+        # Get order book details for mark/index prices
+        orderbook_params = {"market_id": market_id}
+        orderbook_response = await self._connector._api_get(
+            path_url=CONSTANTS.ORDER_BOOK_DETAILS_PATH_URL,
+            params=orderbook_params
+        )
+        
+        # Return combined data as list (similar to Hyperliquid format)
+        return [funding_response, orderbook_response]

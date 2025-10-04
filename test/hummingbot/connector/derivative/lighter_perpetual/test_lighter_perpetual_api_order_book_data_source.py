@@ -13,6 +13,7 @@ from hummingbot.connector.derivative.lighter_perpetual.lighter_perpetual_api_ord
 from hummingbot.connector.test_support.network_mocking_assistant import NetworkMockingAssistant
 from hummingbot.core.api_throttler.async_throttler import AsyncThrottler
 from hummingbot.core.data_type.funding_info import FundingInfo
+from hummingbot.core.data_type.order_book import OrderBook
 from hummingbot.core.data_type.order_book_message import OrderBookMessage, OrderBookMessageType
 from hummingbot.core.web_assistant.web_assistants_factory import WebAssistantsFactory
 from hummingbot.core.web_assistant.ws_assistant import WSAssistant
@@ -242,16 +243,13 @@ class LighterPerpetualAPIOrderBookDataSourceTests(unittest.TestCase):
             self.ob_data_source._subscribe_channels(mock_ws)
         )
 
-        # Verify subscription message was sent
+        # Verify subscription message was sent (should be called once per trading pair)
         mock_ws.send.assert_called_once()
         call_args = mock_ws.send.call_args[0][0]
 
         expected_payload = {
-            "method": "subscribe",
-            "params": {
-                "order_books": [1],
-                "accounts": []
-            }
+            "type": "subscribe",
+            "channel": "order_book/1"
         }
 
         self.assertEqual(call_args.payload, expected_payload)
@@ -280,8 +278,8 @@ class LighterPerpetualAPIOrderBookDataSourceTests(unittest.TestCase):
 
         raw_message = {
             "type": "update/order_book",
-            "data": {
-                "market_id": 1,
+            "channel": "order_book:1",
+            "order_book": {
                 "bids": [
                     {"price": "2999.50", "size": "0.1"}
                 ],
@@ -311,8 +309,8 @@ class LighterPerpetualAPIOrderBookDataSourceTests(unittest.TestCase):
 
         raw_message = {
             "type": "subscribed/order_book",
-            "data": {
-                "market_id": 1,
+            "channel": "order_book:1",
+            "order_book": {
                 "bids": [
                     {"price": "2999.50", "size": "0.1"}
                 ],
@@ -464,6 +462,65 @@ class LighterPerpetualAPIOrderBookDataSourceTests(unittest.TestCase):
 
         # Queue should remain empty
         self.assertEqual(message_queue.qsize(), 0)
+
+    @patch("hummingbot.connector.derivative.lighter_perpetual.lighter_perpetual_web_utils.format_trading_pair_to_market_id")
+    def test_get_new_order_book_successful(self, mock_format_pair):
+        """Test getting new OrderBook instance"""
+        mock_format_pair.return_value = 1
+        
+        snapshot_response = {
+            "code": 200,
+            "order_book_details": [
+                {
+                    "market_id": 1,
+                    "bids": [
+                        {"price": "2999.50", "size": "0.1"},
+                        {"price": "2999.00", "size": "0.2"}
+                    ],
+                    "asks": [
+                        {"price": "3000.50", "size": "0.1"},
+                        {"price": "3001.00", "size": "0.2"}
+                    ]
+                }
+            ]
+        }
+        
+        self.connector._api_get.return_value = snapshot_response
+        
+        result = self.async_run_with_timeout(
+            self.ob_data_source.get_new_order_book(self.trading_pair)
+        )
+        
+        self.assertIsInstance(result, OrderBook)
+        # Verify order book has data
+        self.assertGreater(len(list(result.bid_entries())), 0)
+        self.assertGreater(len(list(result.ask_entries())), 0)
+
+    @patch("hummingbot.connector.derivative.lighter_perpetual.lighter_perpetual_web_utils.format_trading_pair_to_market_id")
+    def test_request_complete_funding_info(self, mock_format_pair):
+        """Test requesting complete funding info"""
+        mock_format_pair.return_value = 1
+        
+        funding_response = {
+            "code": 200,
+            "fundings": [{"funding_rate": "0.0001", "timestamp": 1640995200}]
+        }
+        
+        orderbook_response = {
+            "code": 200,
+            "order_book_details": [{"mark_price": "3000.50", "index_price": "3000.00"}]
+        }
+        
+        self.connector._api_get.side_effect = [funding_response, orderbook_response]
+        
+        result = self.async_run_with_timeout(
+            self.ob_data_source._request_complete_funding_info(self.trading_pair)
+        )
+        
+        self.assertIsInstance(result, list)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0], funding_response)
+        self.assertEqual(result[1], orderbook_response)
 
 
 if __name__ == "__main__":
