@@ -1,7 +1,7 @@
 """
-Lighter Utilities
+Lighter Perpetual Utilities
 
-This module contains utility functions and configuration for the Lighter exchange connector.
+This module contains utility functions and configuration for the Lighter Perpetual exchange connector.
 """
 from decimal import Decimal
 from typing import Any, Dict
@@ -25,11 +25,11 @@ EXAMPLE_PAIR = "BTC-USDC"
 BROKER_ID = "HBOT"
 
 
-class LighterConfigMap(BaseConnectorConfigMap):
+class LighterPerpetualConfigMap(BaseConnectorConfigMap):
     """
-    Configuration map for Lighter connector
+    Configuration map for Lighter Perpetual connector
     """
-    connector: str = "lighter"
+    connector: str = "lighter_perpetual"
     
     lighter_private_key: SecretStr = Field(
         default=...,
@@ -60,9 +60,9 @@ class LighterConfigMap(BaseConnectorConfigMap):
     )
 
 
-KEYS = LighterConfigMap.model_construct()
+KEYS = LighterPerpetualConfigMap.model_construct()
 
-OTHER_DOMAINS = ["lighter_testnet"]
+OTHER_DOMAINS = ["lighter_perpetual_testnet"]
 
 
 def is_exchange_information_valid(exchange_info: Dict[str, Any]) -> bool:

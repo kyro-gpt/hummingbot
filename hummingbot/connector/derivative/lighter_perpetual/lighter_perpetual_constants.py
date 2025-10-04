@@ -1,16 +1,16 @@
 """
-Lighter Exchange Constants
+Lighter Perpetual Exchange Constants
 
-This module contains all constants used by the Lighter exchange connector including
+This module contains all constants used by the Lighter Perpetual exchange connector including
 API URLs, rate limits, order types, and other configuration values.
 """
 from hummingbot.core.api_throttler.data_types import RateLimit
 from hummingbot.core.data_type.in_flight_order import OrderState
 
 # Exchange Information
-EXCHANGE_NAME = "lighter"
-DEFAULT_DOMAIN = "lighter"
-TESTNET_DOMAIN = "lighter_testnet"
+EXCHANGE_NAME = "lighter_perpetual"
+DEFAULT_DOMAIN = "lighter_perpetual"
+TESTNET_DOMAIN = "lighter_perpetual_testnet"
 
 # Base URLs
 REST_URL = {

@@ -1,7 +1,7 @@
 """
-Lighter Authentication
+Lighter Perpetual Authentication
 
-This module handles authentication for the Lighter exchange API using private key signing.
+This module handles authentication for the Lighter Perpetual exchange API using private key signing.
 Based on the lighter-python SDK but simplified to avoid binary dependencies.
 """
 import json
@@ -12,16 +12,16 @@ import logging
 from eth_account import Account
 from eth_account.messages import encode_defunct
 
-from hummingbot.connector.derivative.lighter import lighter_constants as CONSTANTS
+from hummingbot.connector.derivative.lighter_perpetual import lighter_perpetual_constants as CONSTANTS
 from hummingbot.core.web_assistant.auth import AuthBase
 from hummingbot.core.web_assistant.connections.data_types import RESTMethod, RESTRequest, WSRequest
 
 logger = logging.getLogger(__name__)
 
 
-class LighterAuth(AuthBase):
+class LighterPerpetualAuth(AuthBase):
     """
-    Authentication class for Lighter API using private key signing
+    Authentication class for Lighter Perpetual API using private key signing
     """
     
     def __init__(self, private_key: str, account_index: int, api_key_index: int = 1):

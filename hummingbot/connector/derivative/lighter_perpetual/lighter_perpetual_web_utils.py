@@ -1,12 +1,12 @@
 """
-Lighter Web Utilities
+Lighter Perpetual Web Utilities
 
 This module contains utility functions for building URLs, handling requests,
-and managing web assistant factories for the Lighter exchange connector.
+and managing web assistant factories for the Lighter Perpetual exchange connector.
 """
 from typing import Any, Dict, Optional
 
-from hummingbot.connector.derivative.lighter import lighter_constants as CONSTANTS
+from hummingbot.connector.derivative.lighter_perpetual import lighter_perpetual_constants as CONSTANTS
 from hummingbot.core.api_throttler.async_throttler import AsyncThrottler
 from hummingbot.core.web_assistant.auth import AuthBase
 from hummingbot.core.web_assistant.connections.data_types import RESTMethod, RESTRequest
@@ -79,9 +79,9 @@ def create_throttler() -> AsyncThrottler:
     return AsyncThrottler(CONSTANTS.RATE_LIMITS)
 
 
-class LighterRESTPreProcessor(RESTPreProcessorBase):
+class LighterPerpetualRESTPreProcessor(RESTPreProcessorBase):
     """
-    Pre-processor for Lighter REST requests to handle authentication headers
+    Pre-processor for Lighter Perpetual REST requests to handle authentication headers
     """
     
     async def pre_process(self, request: RESTRequest) -> RESTRequest:

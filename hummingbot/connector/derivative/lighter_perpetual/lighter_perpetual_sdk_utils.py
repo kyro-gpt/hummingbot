@@ -324,6 +324,10 @@ def validate_private_key(private_key: str) -> bool:
     :return: True if valid format
     """
     try:
+        # Handle None or non-string input
+        if not isinstance(private_key, str):
+            return False
+            
         # Remove 0x prefix if present
         key = private_key.replace('0x', '')
         
