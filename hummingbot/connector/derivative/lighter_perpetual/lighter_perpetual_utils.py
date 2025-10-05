@@ -60,9 +60,65 @@ class LighterPerpetualConfigMap(BaseConnectorConfigMap):
     )
 
 
+class LighterPerpetualTestnetConfigMap(BaseConnectorConfigMap):
+    """
+    Configuration map for Lighter Perpetual testnet connector
+    """
+    connector: str = "lighter_perpetual_testnet"
+    
+    lighter_private_key: SecretStr = Field(
+        default=...,
+        json_schema_extra={
+            "prompt": "Enter your Lighter testnet private key (hex format starting with 0x)",
+            "is_secure": True,
+            "is_connect_key": True,
+            "prompt_on_new": True,
+        }
+    )
+    
+    lighter_account_index: int = Field(
+        default=...,
+        json_schema_extra={
+            "prompt": "Enter your Lighter testnet account index",
+            "is_connect_key": True,
+            "prompt_on_new": True,
+        }
+    )
+    
+    lighter_api_key_index: int = Field(
+        default=1,
+        json_schema_extra={
+            "prompt": "Enter your Lighter testnet API key index (default: 1)",
+            "is_connect_key": True,
+            "prompt_on_new": True,
+        }
+    )
+
+
 KEYS = LighterPerpetualConfigMap.model_construct()
 
 OTHER_DOMAINS = ["lighter_perpetual_testnet"]
+
+# Default fees for different domains
+# Format: [maker_fee_percent, taker_fee_percent]
+OTHER_DOMAINS_DEFAULT_FEES = {
+    "lighter_perpetual_testnet": [0.05, 0.1]  # 0.05% maker, 0.1% taker
+}
+
+# Example trading pairs for different domains
+OTHER_DOMAINS_EXAMPLE_PAIR = {
+    "lighter_perpetual_testnet": "ETH-USDC"
+}
+
+# Configuration keys for different domains
+OTHER_DOMAINS_KEYS = {
+    "lighter_perpetual_testnet": LighterPerpetualTestnetConfigMap.model_construct()
+}
+
+# Domain parameters for different domains
+OTHER_DOMAINS_PARAMETER = {
+    "lighter_perpetual_testnet": "lighter_perpetual_testnet"
+}
 
 
 def is_exchange_information_valid(exchange_info: Dict[str, Any]) -> bool:
