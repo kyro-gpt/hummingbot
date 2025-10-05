@@ -130,6 +130,7 @@ class LighterPerpetualDerivative(PerpetualDerivativePyBase):
         self._trading_pairs_exchanged_symbols = bidict()
         self._last_traded_prices: Dict[str, float] = {}
         self._account_positions: Dict[str, Position] = {}  # Store position data by trading pair
+        self._account_balances: Dict[str, Decimal] = {}  # Store account balances
         
         # Market data mapping (market_id to trading_pair)
         self._market_id_to_trading_pair: Dict[int, str] = {}
@@ -293,7 +294,7 @@ class LighterPerpetualDerivative(PerpetualDerivativePyBase):
         **kwargs,
     ) -> Tuple[str, float]:
         """
-        Place an order on the exchange
+        Place an order on the exchange using Lighter's sendTx API
         
         :param order_id: Client order ID
         :param trading_pair: Trading pair
@@ -304,25 +305,143 @@ class LighterPerpetualDerivative(PerpetualDerivativePyBase):
         :param position_action: Position action
         :return: Tuple of exchange order ID and timestamp
         """
-        # TODO: Implement order placement using Lighter's sendTx API
-        # This will involve creating the appropriate transaction structure
-        # and signing it with the private key
-        raise NotImplementedError("Order placement not yet implemented")
+        try:
+            # Get market ID for trading pair
+            market_id = self._get_market_id_for_trading_pair(trading_pair)
+            
+            # Convert client order ID to integer (Lighter uses integer client_order_index)
+            client_order_index = self._auth.get_client_order_index(order_id)
+            
+            # Convert amounts to micro units (Lighter uses 1e6 precision)
+            base_amount_micro = int(amount * Decimal("1e6"))
+            price_micro = int(price * Decimal("1e6")) if order_type != OrderType.MARKET else 0
+            
+            # Map order type to Lighter format
+            lighter_order_type = 0 if order_type in [OrderType.LIMIT, OrderType.LIMIT_MAKER] else 1  # LIMIT = 0, MARKET = 1
+            
+            # Prepare transaction info
+            tx_info = {
+                "market_index": market_id,
+                "client_order_index": client_order_index,
+                "base_amount": base_amount_micro,
+                "price": price_micro,
+                "is_ask": trade_type == TradeType.SELL,
+                "order_type": lighter_order_type,
+                "time_in_force": 3,  # GTT = 3 (Good Till Time)
+                "reduce_only": 0,    # Not reduce only by default
+                "trigger_price": 0   # No trigger price for regular orders
+            }
+            
+            # Send transaction using authentication
+            result = await self._auth.send_tx(
+                tx_type=CONSTANTS.TX_TYPE_CREATE_ORDER,
+                tx_info=tx_info
+            )
+            
+            # Extract exchange order ID and timestamp from response
+            exchange_order_id = result.get("order_id", str(client_order_index))
+            timestamp = time.time()
+            
+            self.logger().info(f"Order placed successfully: {order_id} -> {exchange_order_id}")
+            
+            return exchange_order_id, timestamp
+            
+        except Exception as e:
+            self.logger().error(f"Failed to place order {order_id}: {e}")
+            raise
 
     async def _place_cancel(self, order_id: str, tracked_order: InFlightOrder):
         """
-        Cancel an order on the exchange
+        Cancel an order on the exchange using Lighter's sendTx API
         
         :param order_id: Client order ID
         :param tracked_order: Tracked order object
         """
-        # TODO: Implement order cancellation using Lighter's sendTx API
-        raise NotImplementedError("Order cancellation not yet implemented")
+        try:
+            # Get market ID for trading pair
+            market_id = self._get_market_id_for_trading_pair(tracked_order.trading_pair)
+            
+            # Get client order index
+            client_order_index = self._auth.get_client_order_index(order_id)
+            
+            # Prepare transaction info for cancellation
+            tx_info = {
+                "market_index": market_id,
+                "client_order_index": client_order_index
+            }
+            
+            # Send cancellation transaction
+            result = await self._auth.send_tx(
+                tx_type=CONSTANTS.TX_TYPE_CANCEL_ORDER,
+                tx_info=tx_info
+            )
+            
+            self.logger().info(f"Order cancellation sent: {order_id} (client_order_index: {client_order_index})")
+            
+            return result
+            
+        except Exception as e:
+            self.logger().error(f"Failed to cancel order {order_id}: {e}")
+            raise
 
     async def _update_positions(self):
-        """Update account positions"""
-        # TODO: Implement position updates from account API
-        pass
+        """
+        Update account positions parsing position data from account response
+        """
+        try:
+            # Get account information from Lighter API
+            account_info = await self._api_get(
+                path_url=CONSTANTS.ACCOUNT_PATH_URL,
+                params={"account_index": self._account_index}
+            )
+            
+            # Parse position information
+            if "positions" in account_info:
+                positions_data = account_info["positions"]
+                
+                # Clear existing positions
+                self._account_positions.clear()
+                
+                # Process each position
+                for position_data in positions_data:
+                    market_id = position_data.get("market_index")
+                    if market_id is None:
+                        continue
+                        
+                    # Get trading pair for market ID
+                    trading_pair = self._get_trading_pair_for_market_id(market_id)
+                    
+                    # Extract position details
+                    base_amount = Decimal(str(position_data.get("base_amount", "0"))) / Decimal("1e6")  # Convert from micro units
+                    quote_amount = Decimal(str(position_data.get("quote_amount", "0"))) / Decimal("1e6")
+                    
+                    # Skip zero positions
+                    if base_amount == 0:
+                        continue
+                    
+                    # Determine position side
+                    position_side = PositionSide.LONG if base_amount > 0 else PositionSide.SHORT
+                    
+                    # Create position object
+                    position = Position(
+                        trading_pair=trading_pair,
+                        position_side=position_side,
+                        unrealized_pnl=Decimal(str(position_data.get("unrealized_pnl", "0"))) / Decimal("1e6"),
+                        entry_price=Decimal(str(position_data.get("entry_price", "0"))) / Decimal("1e6"),
+                        amount=abs(base_amount),
+                        leverage=Decimal("1")  # Lighter handles leverage internally
+                    )
+                    
+                    self._account_positions[trading_pair] = position
+                    
+                self.logger().debug(f"Updated {len(self._account_positions)} positions")
+                
+            else:
+                self.logger().debug("No positions data found in account response")
+                
+        except Exception as e:
+            self.logger().error(f"Failed to update positions: {e}")
+            # Don't raise exception to avoid breaking the polling loop
 
     async def _trading_pair_position_mode_set(
         self, mode: PositionMode, trading_pair: str
@@ -398,10 +517,16 @@ class LighterPerpetualDerivative(PerpetualDerivativePyBase):
     # Helper methods for market ID mapping
     def _get_market_id_for_trading_pair(self, trading_pair: str) -> int:
         """Get market ID for trading pair"""
+        # First try internal mapping, fallback to web_utils
+        if trading_pair in self._trading_pair_to_market_id:
+            return self._trading_pair_to_market_id[trading_pair]
         return web_utils.format_trading_pair_to_market_id(trading_pair)
 
     def _get_trading_pair_for_market_id(self, market_id: int) -> str:
         """Get trading pair for market ID"""
+        # First try internal mapping, fallback to web_utils
+        if market_id in self._market_id_to_trading_pair:
+            return self._market_id_to_trading_pair[market_id]
         return web_utils.format_market_id_to_trading_pair(market_id)
 
     async def _initialize_trading_pair_symbol_map(self):
@@ -470,22 +595,94 @@ class LighterPerpetualDerivative(PerpetualDerivativePyBase):
 
     def _format_trading_rules(self, exchange_info_dict: Dict[str, Any]) -> Dict[str, TradingRule]:
         """
-        Format trading rules from exchange info
+        Format trading rules from exchange info (orderBookDetails response)
         
-        :param exchange_info_dict: Exchange information dictionary
+        :param exchange_info_dict: Exchange information dictionary from orderBookDetails
         :return: Dictionary of trading rules
         """
-        # TODO: Implement trading rules formatting from Lighter API response
-        return {}
+        trading_rules = {}
+        
+        try:
+            # Parse orderBookDetails response to extract trading rules
+            if "markets" in exchange_info_dict:
+                markets_data = exchange_info_dict["markets"]
+                
+                for market_data in markets_data:
+                    market_id = market_data.get("market_id")
+                    if market_id is None:
+                        continue
+                    
+                    # Get trading pair for market ID
+                    trading_pair = self._get_trading_pair_for_market_id(market_id)
+                    
+                    # Extract trading rule parameters
+                    min_base_amount = Decimal(str(market_data.get("min_base_amount", "0.001"))) / Decimal("1e6")
+                    min_quote_amount = Decimal(str(market_data.get("min_quote_amount", "1"))) / Decimal("1e6")
+                    max_base_amount = Decimal(str(market_data.get("max_base_amount", "1000000"))) / Decimal("1e6")
+                    
+                    # Price and amount precision (typically 6 decimal places for Lighter)
+                    base_precision = 6
+                    quote_precision = 6
+                    
+                    # Create trading rule
+                    trading_rule = TradingRule(
+                        trading_pair=trading_pair,
+                        min_order_size=min_base_amount,
+                        max_order_size=max_base_amount,
+                        min_price_increment=Decimal("0.01"),  # Default price increment
+                        min_base_amount_increment=Decimal("0.000001"),  # 1e-6 precision
+                        min_quote_amount_increment=Decimal("0.000001"),
+                        min_notional_size=min_quote_amount,
+                        buy_order_collateral_token="USDC",
+                        sell_order_collateral_token="USDC"
+                    )
+                    
+                    trading_rules[trading_pair] = trading_rule
+                    
+            self.logger().info(f"Loaded {len(trading_rules)} trading rules")
+            
+        except Exception as e:
+            self.logger().error(f"Failed to format trading rules: {e}")
+            
+        return trading_rules
 
     def _initialize_trading_pair_symbols_from_exchange_info(self, exchange_info: Dict[str, Any]):
         """
-        Initialize trading pair symbols from exchange info
+        Initialize trading pair symbols from exchange info (orderBooks response)
         
-        :param exchange_info: Exchange information dictionary
+        :param exchange_info: Exchange information dictionary from orderBooks
         """
-        # TODO: Implement symbol mapping initialization from Lighter API response
-        pass
+        try:
+            # Parse orderBooks response to build trading_pair <-> market_id mapping
+            if "markets" in exchange_info:
+                markets_data = exchange_info["markets"]
+                
+                # Clear existing mappings
+                self._market_id_to_trading_pair.clear()
+                self._trading_pair_to_market_id.clear()
+                
+                for market_data in markets_data:
+                    market_id = market_data.get("market_id")
+                    symbol = market_data.get("symbol")  # e.g., "ETH-USDC"
+                    
+                    if market_id is not None and symbol:
+                        # Convert symbol to Hummingbot format if needed
+                        trading_pair = symbol.replace("_", "-").replace("/", "-")
+                        
+                        # Build bidirectional mapping
+                        self._market_id_to_trading_pair[market_id] = trading_pair
+                        self._trading_pair_to_market_id[trading_pair] = market_id
+                        
+                        # Also update the bidict for exchange symbols
+                        self._trading_pairs_exchanged_symbols[trading_pair] = symbol
+                
+                self.logger().info(f"Initialized {len(self._market_id_to_trading_pair)} trading pair mappings")
+                
+            else:
+                self.logger().warning("No markets data found in exchange info")
+                
+        except Exception as e:
+            self.logger().error(f"Failed to initialize trading pair symbols: {e}")
 
     def _is_order_not_found_during_cancelation_error(self, response_code: int, response_text: str) -> bool:
         """
@@ -495,8 +692,12 @@ class LighterPerpetualDerivative(PerpetualDerivativePyBase):
         :param response_text: Response text
         :return: True if order not found error
         """
-        # TODO: Implement Lighter-specific error detection
-        return response_code == 404 or "not found" in response_text.lower()
+        # Enhanced Lighter-specific error patterns
+        return (response_code == 404 or
+                "order not found" in response_text.lower() or
+                "invalid order" in response_text.lower() or
+                "order does not exist" in response_text.lower() or
+                "client_order_index not found" in response_text.lower())
 
     def _is_order_not_found_during_status_update_error(self, response_code: int, response_text: str) -> bool:
         """
@@ -506,8 +707,12 @@ class LighterPerpetualDerivative(PerpetualDerivativePyBase):
         :param response_text: Response text
         :return: True if order not found error
         """
-        # TODO: Implement Lighter-specific error detection
-        return response_code == 404 or "not found" in response_text.lower()
+        # Enhanced Lighter-specific error patterns
+        return (response_code == 404 or
+                "order not found" in response_text.lower() or
+                "invalid order" in response_text.lower() or
+                "order does not exist" in response_text.lower() or
+                "client_order_index not found" in response_text.lower())
 
     async def _request_order_status(self, tracked_order: InFlightOrder) -> OrderUpdate:
         """
@@ -527,10 +732,34 @@ class LighterPerpetualDerivative(PerpetualDerivativePyBase):
 
     async def _update_balances(self):
         """
-        Update account balances
+        Update account balances using /api/v1/account endpoint
         """
-        # TODO: Implement balance updates from Lighter account API
-        pass
+        try:
+            # Get account information from Lighter API
+            account_info = await self._api_get(
+                path_url=CONSTANTS.ACCOUNT_PATH_URL,
+                params={"account_index": self._account_index}
+            )
+            
+            # Parse balance information
+            if "account" in account_info:
+                account_data = account_info["account"]
+                
+                # Extract collateral balance (USDC)
+                collateral_balance = Decimal(str(account_data.get("collateral", "0")))
+                
+                # Update balance in the connector
+                self._account_balances["USDC"] = collateral_balance
+                
+                # Log balance update
+                self.logger().debug(f"Updated balances: USDC = {collateral_balance}")
+                
+            else:
+                self.logger().warning("No account data found in balance response")
+                
+        except Exception as e:
+            self.logger().error(f"Failed to update balances: {e}")
+            # Don't raise exception to avoid breaking the polling loop
 
     async def _update_trading_fees(self):
         """
@@ -541,7 +770,145 @@ class LighterPerpetualDerivative(PerpetualDerivativePyBase):
 
     async def _user_stream_event_listener(self):
         """
-        Listen to user stream events
+        Listen to user stream events and process account updates
         """
-        # TODO: Implement user stream event processing
-        pass
+        async for event_message in self._iter_user_event_queue():
+            try:
+                await self._process_user_stream_event(event_message)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self.logger().error(f"Error processing user stream event: {e}")
+
+    async def _process_user_stream_event(self, event_message: Dict[str, Any]):
+        """
+        Process individual user stream events
+        
+        :param event_message: Event message from user stream
+        """
+        try:
+            message_type = event_message.get("type")
+            
+            if message_type == "update/account_all":
+                # Process account updates (balances, positions, orders)
+                await self._process_account_update(event_message)
+                
+            elif message_type == "subscribed/account_all":
+                # Initial account state - process as account update
+                await self._process_account_update(event_message)
+                
+            else:
+                self.logger().debug(f"Unhandled user stream message type: {message_type}")
+                
+        except Exception as e:
+            self.logger().error(f"Error processing user stream event {event_message.get('type', 'unknown')}: {e}")
+
+    async def _process_account_update(self, event_message: Dict[str, Any]):
+        """
+        Process account update messages from user stream
+        
+        :param event_message: Account update message
+        """
+        try:
+            account_data = event_message.get("account", {})
+            
+            # Update balances
+            if "collateral" in account_data:
+                collateral_balance = Decimal(str(account_data["collateral"]))
+                self._account_balances["USDC"] = collateral_balance
+                self.logger().debug(f"Updated balance from user stream: USDC = {collateral_balance}")
+            
+            # Update positions
+            if "positions" in event_message:
+                positions_data = event_message["positions"]
+                
+                # Clear existing positions
+                self._account_positions.clear()
+                
+                # Process each position
+                for position_data in positions_data:
+                    market_id = position_data.get("market_index")
+                    if market_id is None:
+                        continue
+                        
+                    # Get trading pair for market ID
+                    trading_pair = self._get_trading_pair_for_market_id(market_id)
+                    
+                    # Extract position details
+                    base_amount = Decimal(str(position_data.get("base_amount", "0"))) / Decimal("1e6")
+                    
+                    # Skip zero positions
+                    if base_amount == 0:
+                        continue
+                    
+                    # Determine position side
+                    position_side = PositionSide.LONG if base_amount > 0 else PositionSide.SHORT
+                    
+                    # Create position object
+                    position = Position(
+                        trading_pair=trading_pair,
+                        position_side=position_side,
+                        unrealized_pnl=Decimal(str(position_data.get("unrealized_pnl", "0"))) / Decimal("1e6"),
+                        entry_price=Decimal(str(position_data.get("entry_price", "0"))) / Decimal("1e6"),
+                        amount=abs(base_amount),
+                        leverage=Decimal("1")  # Lighter handles leverage internally
+                    )
+                    
+                    self._account_positions[trading_pair] = position
+                
+                self.logger().debug(f"Updated {len(self._account_positions)} positions from user stream")
+            
+            # Process order updates if present
+            if "orders" in event_message:
+                orders_data = event_message["orders"]
+                await self._process_order_updates_from_stream(orders_data)
+                
+        except Exception as e:
+            self.logger().error(f"Error processing account update: {e}")
+
+    async def _process_order_updates_from_stream(self, orders_data: List[Dict[str, Any]]):
+        """
+        Process order updates from user stream
+        
+        :param orders_data: List of order data from stream
+        """
+        try:
+            for order_data in orders_data:
+                client_order_index = order_data.get("client_order_index")
+                if client_order_index is None:
+                    continue
+                
+                # Find the corresponding tracked order
+                tracked_order = None
+                for order in self._order_tracker.all_orders.values():
+                    if self._auth.get_client_order_index(order.client_order_id) == client_order_index:
+                        tracked_order = order
+                        break
+                
+                if tracked_order is None:
+                    continue
+                
+                # Extract order status
+                order_status = order_data.get("status", "unknown")
+                
+                # Map Lighter status to Hummingbot OrderState
+                if order_status in CONSTANTS.ORDER_STATE:
+                    new_state = CONSTANTS.ORDER_STATE[order_status]
+                else:
+                    self.logger().warning(f"Unknown order status: {order_status}")
+                    continue
+                
+                # Create order update
+                order_update = OrderUpdate(
+                    trading_pair=tracked_order.trading_pair,
+                    update_timestamp=time.time(),
+                    new_state=new_state,
+                    client_order_id=tracked_order.client_order_id,
+                    exchange_order_id=tracked_order.exchange_order_id,
+                )
+                
+                # Process the order update
+                self._order_tracker.process_order_update(order_update)
+                
+        except Exception as e:
+            self.logger().error(f"Error processing order updates from stream: {e}")

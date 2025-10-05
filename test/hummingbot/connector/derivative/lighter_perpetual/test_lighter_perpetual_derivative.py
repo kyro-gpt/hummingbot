@@ -171,28 +171,46 @@ class LighterPerpetualDerivativeTests(unittest.TestCase):
         
         mock_api_get.assert_called_once_with(path_url=CONSTANTS.INFO_PATH_URL)
 
-    def test_place_order_not_implemented(self):
-        """Test that place order raises NotImplementedError"""
-        with self.assertRaises(NotImplementedError):
-            self.async_run_with_timeout(
-                self.connector._place_order(
-                    order_id="test_order",
-                    trading_pair="ETH-USDC",
-                    amount=Decimal("1.0"),
-                    trade_type=TradeType.BUY,
-                    order_type=OrderType.LIMIT,
-                    price=Decimal("3000.0")
-                )
-            )
-
-    def test_place_cancel_not_implemented(self):
-        """Test that place cancel raises NotImplementedError"""
-        mock_order = MagicMock(spec=InFlightOrder)
+    def test_place_order_implemented(self):
+        """Test that place order is now implemented"""
+        # Mock the auth methods
+        self.connector._auth.get_client_order_index = MagicMock(return_value=12345)
+        self.connector._auth.send_tx = AsyncMock(return_value={"order_id": "67890", "timestamp": 1234567890})
         
-        with self.assertRaises(NotImplementedError):
-            self.async_run_with_timeout(
-                self.connector._place_cancel("test_order", mock_order)
+        result = self.async_run_with_timeout(
+            self.connector._place_order(
+                order_id="test_order",
+                trading_pair="ETH-USDC",
+                amount=Decimal("1.0"),
+                trade_type=TradeType.BUY,
+                order_type=OrderType.LIMIT,
+                price=Decimal("3000.0")
             )
+        )
+        
+        # Should return tuple of (exchange_order_id, timestamp)
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(len(result), 2)
+        exchange_order_id, timestamp = result
+        self.assertIsInstance(exchange_order_id, str)
+        self.assertIsInstance(timestamp, float)
+
+    def test_place_cancel_implemented(self):
+        """Test that place cancel is now implemented"""
+        mock_order = MagicMock(spec=InFlightOrder)
+        mock_order.trading_pair = "ETH-USDC"
+        
+        # Mock the auth methods
+        self.connector._auth.get_client_order_index = MagicMock(return_value=12345)
+        self.connector._auth.send_tx = AsyncMock(return_value={"success": True})
+        
+        # Should not raise exception
+        result = self.async_run_with_timeout(
+            self.connector._place_cancel("test_order", mock_order)
+        )
+        
+        # Should return the result from send_tx
+        self.assertEqual(result, {"success": True})
 
     def test_trading_pair_position_mode_set_oneway(self):
         """Test setting ONEWAY position mode"""

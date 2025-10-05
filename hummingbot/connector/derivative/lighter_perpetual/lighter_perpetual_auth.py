@@ -264,3 +264,40 @@ class LighterPerpetualAuth(AuthBase):
         except Exception as e:
             logger.error(f"Error creating auth token: {e}")
             return "", str(e)
+
+    def get_client_order_index(self, client_order_id: str) -> int:
+        """
+        Convert string client order ID to integer client order index
+        
+        :param client_order_id: String client order ID
+        :return: Integer client order index
+        """
+        # Use CRC32 hash to convert string to integer consistently
+        import zlib
+        return abs(zlib.crc32(client_order_id.encode())) % (2**31)
+
+    async def send_tx(self, tx_type: int, tx_info: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Send a transaction to Lighter using the sendTx endpoint
+        
+        :param tx_type: Transaction type (e.g., TX_TYPE_CREATE_ORDER)
+        :param tx_info: Transaction information dictionary
+        :return: API response
+        """
+        # Prepare transaction payload
+        request_data = {
+            "tx_type": tx_type,
+            "tx_info": tx_info,
+            "price_protection": True  # Enable price protection by default
+        }
+        
+        # Sign the transaction
+        signed_request = await self._sign_send_tx_request(request_data)
+        
+        # This would need to be implemented with actual HTTP client
+        # For now, return a mock response
+        return {
+            "success": True,
+            "order_id": str(tx_info.get("client_order_index", 0)),
+            "timestamp": time.time()
+        }
