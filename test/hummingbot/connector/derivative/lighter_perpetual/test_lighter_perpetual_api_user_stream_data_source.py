@@ -255,3 +255,150 @@ class LighterPerpetualAPIUserStreamDataSourceTests(unittest.TestCase):
     def test_ping_timeout_constant(self):
         """Test ping timeout constant"""
         self.assertEqual(self.data_source.PING_TIMEOUT, 10.0)
+
+    def test_is_connected_property_no_ws(self):
+        """Test is_connected property when no WebSocket assistant exists"""
+        result = self.data_source.is_connected
+        self.assertFalse(result)
+
+    def test_is_connected_property_with_ws(self):
+        """Test is_connected property with WebSocket assistant"""
+        mock_ws = MagicMock()
+        mock_ws.connected = True
+        self.data_source._ws_assistant = mock_ws
+        
+        result = self.data_source.is_connected
+        self.assertTrue(result)
+
+    def test_is_connected_property_disconnected_ws(self):
+        """Test is_connected property with disconnected WebSocket"""
+        mock_ws = MagicMock()
+        mock_ws.connected = False
+        self.data_source._ws_assistant = mock_ws
+        
+        result = self.data_source.is_connected
+        self.assertFalse(result)
+
+    def test_message_stats_property(self):
+        """Test message_stats property returns copy"""
+        # Modify internal stats
+        self.data_source._message_stats["connected"] = 5
+        self.data_source._message_stats["updates"] = 10
+        
+        result = self.data_source.message_stats
+        
+        # Should return a copy with current values
+        self.assertEqual(result["connected"], 5)
+        self.assertEqual(result["updates"], 10)
+        
+        # Modifying returned dict should not affect internal stats
+        result["connected"] = 999
+        self.assertEqual(self.data_source._message_stats["connected"], 5)
+
+    def test_get_connection_health(self):
+        """Test get_connection_health method"""
+        # Set up some test data
+        self.data_source._message_stats["connected"] = 1
+        self.data_source._message_stats["updates"] = 5
+        
+        result = self.data_source.get_connection_health()
+        
+        expected_keys = {
+            "is_connected", "last_recv_time", "message_stats", 
+            "ws_assistant_exists", "account_index", "domain"
+        }
+        self.assertEqual(set(result.keys()), expected_keys)
+        
+        self.assertFalse(result["is_connected"])
+        self.assertEqual(result["account_index"], self.account_index)
+        self.assertEqual(result["domain"], CONSTANTS.DEFAULT_DOMAIN)
+        self.assertFalse(result["ws_assistant_exists"])
+
+    def test_process_event_message_with_stats_tracking(self):
+        """Test message processing updates statistics"""
+        queue = asyncio.Queue()
+        
+        # Test connected message
+        connected_msg = {"type": "connected", "session_id": "test"}
+        self.async_run_with_timeout(
+            self.data_source._process_event_message(connected_msg, queue)
+        )
+        self.assertEqual(self.data_source._message_stats["connected"], 1)
+        
+        # Test subscribed message
+        subscribed_msg = {
+            "type": "subscribed/account_all",
+            "channel": "account_all:1",
+            "account": {"account_index": 1}
+        }
+        self.async_run_with_timeout(
+            self.data_source._process_event_message(subscribed_msg, queue)
+        )
+        self.assertEqual(self.data_source._message_stats["subscribed"], 1)
+        
+        # Test update message
+        update_msg = {
+            "type": "update/account_all",
+            "channel": "account_all:1",
+            "account": {"account_index": 1}
+        }
+        self.async_run_with_timeout(
+            self.data_source._process_event_message(update_msg, queue)
+        )
+        self.assertEqual(self.data_source._message_stats["updates"], 1)
+        
+        # Test error message
+        error_msg = {"type": "error", "message": "Test error"}
+        self.async_run_with_timeout(
+            self.data_source._process_event_message(error_msg, queue)
+        )
+        self.assertEqual(self.data_source._message_stats["errors"], 1)
+        
+        # Test unhandled message
+        unknown_msg = {"type": "unknown_type", "data": "test"}
+        self.async_run_with_timeout(
+            self.data_source._process_event_message(unknown_msg, queue)
+        )
+        self.assertEqual(self.data_source._message_stats["unhandled"], 1)
+
+    @patch("hummingbot.connector.derivative.lighter_perpetual.lighter_perpetual_api_user_stream_data_source.LighterPerpetualAPIUserStreamDataSource._connected_websocket_assistant")
+    def test_get_ws_assistant_with_retry_success_first_attempt(self, mock_connected_ws):
+        """Test retry logic succeeds on first attempt"""
+        mock_ws = AsyncMock()
+        mock_connected_ws.return_value = mock_ws
+        
+        result = self.async_run_with_timeout(
+            self.data_source._get_ws_assistant_with_retry(max_retries=3)
+        )
+        
+        self.assertEqual(result, mock_ws)
+        mock_connected_ws.assert_called_once()
+
+    @patch("hummingbot.connector.derivative.lighter_perpetual.lighter_perpetual_api_user_stream_data_source.LighterPerpetualAPIUserStreamDataSource._connected_websocket_assistant")
+    @patch("asyncio.sleep")
+    def test_get_ws_assistant_with_retry_success_after_failure(self, mock_sleep, mock_connected_ws):
+        """Test retry logic succeeds after initial failure"""
+        mock_ws = AsyncMock()
+        mock_connected_ws.side_effect = [Exception("Connection failed"), mock_ws]
+        
+        result = self.async_run_with_timeout(
+            self.data_source._get_ws_assistant_with_retry(max_retries=3)
+        )
+        
+        self.assertEqual(result, mock_ws)
+        self.assertEqual(mock_connected_ws.call_count, 2)
+        mock_sleep.assert_called_once_with(1)  # 2^0 = 1 second backoff
+
+    @patch("hummingbot.connector.derivative.lighter_perpetual.lighter_perpetual_api_user_stream_data_source.LighterPerpetualAPIUserStreamDataSource._connected_websocket_assistant")
+    @patch("asyncio.sleep")
+    def test_get_ws_assistant_with_retry_all_attempts_fail(self, mock_sleep, mock_connected_ws):
+        """Test retry logic when all attempts fail"""
+        mock_connected_ws.side_effect = Exception("Connection failed")
+        
+        with self.assertRaises(Exception):
+            self.async_run_with_timeout(
+                self.data_source._get_ws_assistant_with_retry(max_retries=2)
+            )
+        
+        self.assertEqual(mock_connected_ws.call_count, 2)
+        mock_sleep.assert_called_once_with(1)  # Only one retry, so one sleep call
